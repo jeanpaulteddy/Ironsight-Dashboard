@@ -65,6 +65,7 @@ import TargetView from "./components/TargetView.vue"
 import ScoreTable from "./components/ScoreTable.vue"
 
 const host = window.location.hostname
+const API = `http://${host}:8000`
 
 const posture = ref(null)
 const shots = ref([])
@@ -77,9 +78,9 @@ const _lastTipsAt = ref(0)             // rate limit tips text
 const _tips = ref([])                  // stable tips array
 
 async function clearShots() {
-  await fetch("/api/reset", { method: "POST" })
+  await fetch(`${API}/api/reset`, { method: "POST" })
   shots.value = []
-  const stRes = await fetch("/api/state")
+  const stRes = await fetch(`${API}/api/state`)
   table.value = await stRes.json()
 }
 
@@ -90,14 +91,14 @@ function postureClass(score) {
 }
 
 onMounted(async () => {
-  const shotsRes = await fetch("/api/shots")
-  const stRes = await fetch("/api/state")
+  const shotsRes = await fetch(`${API}/api/shots`)
+  const stRes = await fetch(`${API}/api/state`)
   table.value = await stRes.json()
   stateText.value = JSON.stringify(table.value, null, 2)
   const shotsData = await shotsRes.json()
   shots.value = shotsData.shots
 
-  const cfgRes = await fetch("/api/config")
+  const cfgRes = await fetch(`${API}/api/config`)
   const cfg = await cfgRes.json()
   const out = {}
   for (const [k, v] of Object.entries(cfg.RINGS_M)) out[String(k)] = v
@@ -174,7 +175,7 @@ onMounted(async () => {
 
 .page { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; background:#0b0f17; color:#e7ecf5; min-height:100vh; }
 .topbar { padding:16px 18px; border-bottom:1px solid rgba(255,255,255,0.08); }
-.title { font-size:20px; font-weight:700; }
+.title { font-size: 20px; font-weight: 700; }
 .subtitle { opacity:0.7; font-size:12px; margin-top:4px; }
 .card {
   background: rgba(255,255,255,0.05);
