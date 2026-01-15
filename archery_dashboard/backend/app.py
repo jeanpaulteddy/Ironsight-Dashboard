@@ -187,5 +187,8 @@ def api_get_mode():
 
 @app.post("/api/mode")
 def api_set_mode(payload: ModeIn):
+    before = get_mode()
     set_mode(payload.mode)
-    return {"mode": get_mode()}
+    after = get_mode()
+    print("[MODE] before=", before, "requested=", payload.mode, "after=", after)
+    return {"mode": after}
