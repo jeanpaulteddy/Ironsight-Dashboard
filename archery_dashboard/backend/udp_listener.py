@@ -1,10 +1,32 @@
 # backend/udp_listener.py
-import asyncio, json, math
+import asyncio, json, math, time
 from typing import Dict, Any
-
+from urllib.request import urlopen, Request
 # Keep consistent with your current geometry idea
 D_M = 1.0
 HALF_SPAN = D_M / 2.0
+
+_MODE_CACHE = {"mode": "shooting", "ts": 0.0}
+
+def get_mode_cached(ttl=0.5) -> str:
+    """Fetch /api/mode from backend at most once per ttl seconds."""
+    now = time.time()
+    if now - _MODE_CACHE["ts"] < ttl:
+        return _MODE_CACHE["mode"]
+
+    try:
+        req = Request("http://127.0.0.1:8000/api/mode", headers={"Accept": "application/json"})
+        with urlopen(req, timeout=0.2) as r:
+            data = json.loads(r.read().decode("utf-8"))
+            mode = data.get("mode", "shooting")
+            if mode in ("shooting", "scoring"):
+                _MODE_CACHE["mode"] = mode
+    except Exception:
+        # If backend is restarting, keep last known mode
+        pass
+
+    _MODE_CACHE["ts"] = now
+    return _MODE_CACHE["mode"]
 
 def extract_compass_peaks(msg: Dict[str, Any], ch2comp: Dict[str, str]) -> Dict[str, float]:
     ch = msg.get("ch", {})
@@ -47,7 +69,11 @@ class UDPProtocol(asyncio.DatagramProtocol):
         sx, sy = features_from_peaks(comp["N"], comp["E"], comp["W"], comp["S"])
         x, y = xy_from_features(sx, sy)
         r = math.hypot(x, y)
-
+        
+        # Ignore hits unless system is in shooting mode
+        if get_mode_cached() != "shooting":
+            return
+        
         event = {
             "src_ip": addr[0],
             "x": x,

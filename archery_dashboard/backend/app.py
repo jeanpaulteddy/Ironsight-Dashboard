@@ -9,7 +9,7 @@ import config
 from scoring import score_from_r
 from state import SessionState, Shot
 from udp_listener import udp_loop
-from pydantic import BaseModel
+from pydantic import BaseModel # type: ignore
 import threading
 
 
