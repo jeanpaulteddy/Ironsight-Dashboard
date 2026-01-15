@@ -63,7 +63,7 @@ CH2COMP = {"0": "N", "1": "E", "2": "W", "3": "S"}
 @app.on_event("startup")
 async def startup():
     # start UDP loop and broadcast loop
-    asyncio.create_task(udp_loop(config.UDP_HOST, config.UDP_PORT, queue, CH2COMP))
+    asyncio.create_task(udp_loop(config.UDP_HOST, config.UDP_PORT, queue, CH2COMP, get_mode))
     asyncio.create_task(dispatch_loop())
 
 @app.on_event("startup")
