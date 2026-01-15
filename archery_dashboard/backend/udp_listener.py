@@ -71,7 +71,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
             pass
 
 async def udp_loop(host: str, port: int, queue: asyncio.Queue, ch2comp: Dict[str, str], mode):
-    print(f"[LALALALALA] mode is : {mode}")
+    print(f"[LALALALALA] mode is : {mode()}")
     loop = asyncio.get_running_loop()
     transport, _ = await loop.create_datagram_endpoint(
         lambda: UDPProtocol(queue, ch2comp),
