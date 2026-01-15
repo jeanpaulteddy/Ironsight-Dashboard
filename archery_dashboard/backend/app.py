@@ -9,6 +9,10 @@ import config
 from scoring import score_from_r
 from state import SessionState, Shot
 from udp_listener import udp_loop
+from pydantic import BaseModel
+import threading
+
+
 
 app = FastAPI()
 
@@ -19,12 +23,27 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
+_mode_lock = threading.Lock()
+_mode = "shooting"  # or "scoring" if you prefer starting “safe”
 _pose_clients: set[WebSocket] = set()
 _pose_queue: asyncio.Queue = asyncio.Queue()
 clients: Set[WebSocket] = set()
 state = SessionState()
 queue: asyncio.Queue = asyncio.Queue(maxsize=200)
+
+def get_mode() -> str:
+    with _mode_lock:
+        return _mode
+
+def set_mode(m: str) -> None:
+    global _mode
+    if m not in ("shooting", "scoring"):
+        raise ValueError("mode must be 'shooting' or 'scoring'")
+    with _mode_lock:
+        _mode = m
+
+class ModeIn(BaseModel):
+    mode: str
 
 async def _pose_broadcaster():
     while True:
@@ -161,3 +180,12 @@ def get_shots():
 @app.get("/api/posture")
 def api_posture():
     return {"pose": get_latest_pose()}
+
+@app.get("/api/mode")
+def api_get_mode():
+    return {"mode": get_mode()}
+
+@app.post("/api/mode")
+def api_set_mode(body: ModeIn):
+    set_mode(body.mode)
+    return {"ok": True, "mode": get_mode()}
