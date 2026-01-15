@@ -144,6 +144,10 @@ onMounted(async () => {
 </script>
 
 <style>
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
   .grid2 {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -265,5 +269,9 @@ onMounted(async () => {
 
 .pmsgLine{
   margin-top: 6px;
+}
+
+.card.camera {
+  overflow: hidden;
 }
 </style>
