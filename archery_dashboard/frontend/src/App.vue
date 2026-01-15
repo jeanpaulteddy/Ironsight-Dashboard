@@ -8,6 +8,14 @@
         <div class="grid2">
           <!-- LEFT COLUMN -->
           <div class="col">
+            <section class="card">
+              <div class="cardhead">
+                <h2>Target</h2>
+                <button class="btn" @click="clearShots">Clear</button>
+              </div>
+              <TargetView v-if="Object.keys(rings).length" :shots="shots" :rings="rings" />
+            </section>
+
             <section class="card camera">
               <h2>Camera</h2>
 
@@ -29,13 +37,7 @@
               </div>
             </section>
 
-            <section class="card">
-              <div class="cardhead">
-                <h2>Target</h2>
-                <button class="btn" @click="clearShots">Clear</button>
-              </div>
-              <TargetView v-if="Object.keys(rings).length" :shots="shots" :rings="rings" />
-            </section>
+            
           </div>
 
           <!-- RIGHT COLUMN -->
