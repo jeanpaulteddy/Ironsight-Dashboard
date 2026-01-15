@@ -19,16 +19,20 @@
             <section class="card camera">
               <h2>Camera</h2>
 
-              <div v-if="postureSmooth?.posture" class="posture postureInCam">
-                <div class="pscore" :class="postureClass(postureSmooth.posture.score)">
-                  {{ Math.round(postureSmooth.posture.score) }}
-                </div>
-                <div class="ptips">
-                  <div class="ptitle">Posture</div>
-                  <div v-if="postureSmooth.posture.messages?.length" class="pmsg">
-                    {{ postureSmooth.posture.messages.join(" • ") }}
+              <div class="camHeader">
+                <div v-if="postureSmooth?.posture" class="posture postureInCam">
+                  <div class="pscore" :class="postureClass(postureSmooth.posture.score)">
+                    {{ Math.round(postureSmooth.posture.score) }}
                   </div>
-                  <div v-else class="pmsg ok">Looks good</div>
+                  <div class="ptips">
+                    <div class="ptitle">Posture</div>
+                    <div v-if="postureSmooth.posture.messages?.length" class="pmsg">
+                      <div v-for="(m, i) in postureSmooth.posture.messages" :key="i" class="pmsgLine">
+                        {{ m }}
+                      </div>
+                    </div>
+                    <div v-else class="pmsg ok">Looks good</div>
+                  </div>
                 </div>
               </div>
 
@@ -206,16 +210,17 @@ onMounted(async () => {
   margin-bottom: 12px;
 }
 
-.pscore {
-  width: 56px;
-  height: 56px;
-  border-radius: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.pscore{
+  width: 64px;
+  height: 64px;
+  border-radius: 14px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
   font-weight: 900;
-  font-size: 26px;
-  color: #0b0f14;
+  font-size: 28px;
+  color:#0b0f14;
+  flex: 0 0 64px;
 }
 
 .pscore.good { background: rgba(60, 220, 120, 0.95); }
@@ -252,7 +257,13 @@ onMounted(async () => {
   object-fit: cover;
   display: block;
 }
-.postureInCam {
+
+.camHeader{
+  min-height: 110px;
   margin-bottom: 10px;
+}
+
+.pmsgLine{
+  margin-top: 6px;
 }
 </style>
