@@ -6,16 +6,8 @@
 
     <main>
         <div class="grid2">
-          <!-- LEFT COLUMN -->
+          <!-- LEFT COLUMN (60%) -->
           <div class="col">
-            <section class="card">
-              <div class="cardhead">
-                <h2>Target</h2>
-                <button class="btn" @click="clearShots">Clear</button>
-              </div>
-              <TargetView v-if="Object.keys(rings).length" :shots="shots" :rings="rings" />
-            </section>
-
             <section class="card camera">
               <h2>Camera</h2>
 
@@ -40,9 +32,14 @@
                 <img class="camImg" :src="`http://${host}:8081/stream`" alt="camera" />
               </div>
             </section>
+
+            <section class="card">
+              <h2>Status</h2>
+              <pre class="mono">{{ stateText }}</pre>
+            </section>
           </div>
 
-          <!-- RIGHT COLUMN -->
+          <!-- RIGHT COLUMN (40%) -->
           <div class="col">
             <section class="card">
               <h2>Scorecard</h2>
@@ -50,8 +47,11 @@
             </section>
 
             <section class="card">
-              <h2>Status</h2>
-              <pre class="mono">{{ stateText }}</pre>
+              <div class="cardhead">
+                <h2>Target</h2>
+                <button class="btn" @click="clearShots">Clear</button>
+              </div>
+              <TargetView v-if="Object.keys(rings).length" :shots="shots" :rings="rings" />
             </section>
           </div>
         </div>
@@ -150,7 +150,7 @@ onMounted(async () => {
 
   .grid2 {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 3fr 2fr;
   gap: 14px;
   align-items: start;
   padding: 14px;
@@ -166,7 +166,7 @@ onMounted(async () => {
   margin-bottom: 10px;
 }
 
-@media (max-width: 1100px) {
+@media (max-width: 900px) {
   .grid2 {
     grid-template-columns: 1fr;
   }
