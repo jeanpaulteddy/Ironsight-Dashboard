@@ -1,7 +1,9 @@
 # backend/udp_listener.py
 import asyncio, json, math
 from typing import Dict, Any
-from mode_state import get_mode
+import os
+import mode_state
+
 # Keep consistent with your current geometry idea
 D_M = 1.0
 HALF_SPAN = D_M / 2.0
@@ -48,9 +50,8 @@ class UDPProtocol(asyncio.DatagramProtocol):
         x, y = xy_from_features(sx, sy)
         r = math.hypot(x, y)
         
-        mode = get_mode()
-        print("[UDP] mode_seen =", mode)
-        # Ignore hits unless system is in shooting mode
+        mode = mode_state.get_mode()
+        print("[UDP] pid=", os.getpid(), "mode_seen=", mode, "mode_state_id=", id(mode_state))
         if mode != "shooting":
             return
 
