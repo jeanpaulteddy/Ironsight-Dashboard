@@ -187,4 +187,5 @@ def api_get_mode():
 
 @app.post("/api/mode")
 def api_set_mode(payload: ModeIn):
-    return {"mode": set_mode(payload.mode)}
+    set_mode(payload.mode)
+    return {"mode": get_mode()}
