@@ -49,6 +49,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
         r = math.hypot(x, y)
         
         mode = get_mode()
+        print("[UDP] mode_seen =", mode)
         # Ignore hits unless system is in shooting mode
         if mode != "shooting":
             return
