@@ -28,6 +28,20 @@
 
         <section class="card">
           <h2>Status</h2>
+
+          <div v-if="posture?.posture" class="posture">
+            <div class="pscore" :class="postureClass(posture.posture.score)">
+              {{ Math.round(posture.posture.score) }}
+            </div>
+            <div class="ptips">
+              <div class="ptitle">Posture</div>
+              <div v-if="posture.posture.messages?.length" class="pmsg">
+                {{ posture.posture.messages.join(" • ") }}
+              </div>
+              <div v-else class="pmsg ok">Looks good</div>
+            </div>
+          </div>
+
           <pre class="mono">{{ stateText }}</pre>
         </section>
       </div>
@@ -40,6 +54,7 @@ import { ref, onMounted } from "vue"
 import TargetView from "./components/TargetView.vue"
 import ScoreTable from "./components/ScoreTable.vue"
 
+const posture = ref(null)
 const shots = ref([])
 const rings = ref({})
 const table = ref(null)
@@ -50,6 +65,22 @@ async function clearShots() {
   shots.value = []
   const stRes = await fetch("/api/state")
   table.value = await stRes.json()
+}
+
+async function refreshPosture() {
+  try {
+    const r = await fetch("/api/posture")
+    const j = await r.json()
+    posture.value = j.pose
+  } catch (e) {
+    // ignore transient errors
+  }
+}
+
+function postureClass(score) {
+  if (score >= 85) return "good"
+  if (score >= 70) return "warn"
+  return "bad"
 }
 
 onMounted(async () => {
@@ -75,6 +106,8 @@ onMounted(async () => {
       stateText.value = JSON.stringify(table.value, null, 2)
     }
   }
+  await refreshPosture()
+  setInterval(refreshPosture, 250)
 })
 </script>
 
@@ -109,4 +142,45 @@ onMounted(async () => {
   gap: 12px;
 }
 .cardhead h2 { margin: 0; }
+
+.posture {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 14px;
+  background: rgba(255,255,255,0.04);
+  margin-bottom: 12px;
+}
+
+.pscore {
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 900;
+  font-size: 26px;
+  color: #0b0f14;
+}
+
+.pscore.good { background: rgba(60, 220, 120, 0.95); }
+.pscore.warn { background: rgba(255, 200, 60, 0.95); }
+.pscore.bad  { background: rgba(255, 90, 90, 0.95); }
+
+.ptitle {
+  font-weight: 800;
+  opacity: 0.9;
+  margin-bottom: 2px;
+}
+
+.pmsg {
+  opacity: 0.85;
+  line-height: 1.2;
+}
+.pmsg.ok {
+  opacity: 0.75;
+}
 </style>
