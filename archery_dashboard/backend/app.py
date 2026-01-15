@@ -11,7 +11,7 @@ from state import SessionState, Shot
 from udp_listener import udp_loop
 from pydantic import BaseModel # type: ignore
 import threading
-
+from mode_state import get_mode, set_mode
 
 
 app = FastAPI()
@@ -186,6 +186,5 @@ def api_get_mode():
     return {"mode": get_mode()}
 
 @app.post("/api/mode")
-def api_set_mode(body: ModeIn):
-    set_mode(body.mode)
-    return {"ok": True, "mode": get_mode()}
+def api_set_mode(payload: ModeIn):
+    return {"mode": set_mode(payload.mode)}
