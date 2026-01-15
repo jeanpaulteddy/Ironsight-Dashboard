@@ -19,13 +19,13 @@
             <section class="card camera">
               <h2>Camera</h2>
 
-              <div v-if="posture?.posture" class="posture postureInCam">
-                <div class="pscore" :class="postureClass(posture.posture.score)">
+              <div v-if="postureSmooth?.posture" class="posture postureInCam">
+                <div class="pscore" :class="postureClass(postureSmooth.posture.score)">
                   {{ Math.round(posture.posture.score) }}
                 </div>
                 <div class="ptips">
                   <div class="ptitle">Posture</div>
-                  <div v-if="posture.posture.messages?.length" class="pmsg">
+                  <div v-if="postureSmooth.posture.messages?.length" class="pmsg">
                     {{ posture.posture.messages.join(" • ") }}
                   </div>
                   <div v-else class="pmsg ok">Looks good</div>
@@ -36,8 +36,6 @@
                 <img class="camImg" :src="`http://${host}:8081/stream`" alt="camera" />
               </div>
             </section>
-
-            
           </div>
 
           <!-- RIGHT COLUMN -->
@@ -69,6 +67,10 @@ const shots = ref([])
 const rings = ref({})
 const table = ref(null)
 const stateText = ref("loading...")
+const postureSmooth = ref(null)        // smoothed posture object for UI
+const _emaScore = ref(null)            // running average
+const _lastTipsAt = ref(0)             // rate limit tips text
+const _tips = ref([])                  // stable tips array
 
 async function clearShots() {
   await fetch("/api/reset", { method: "POST" })
@@ -109,7 +111,30 @@ onMounted(async () => {
   const wsPose = new WebSocket(`ws://${location.hostname}:8000/ws_pose`)
   wsPose.onmessage = (ev) => {
     const msg = JSON.parse(ev.data)
-    if (msg?.type === "pose") posture.value = msg
+    if (msg?.type !== "pose" || !msg.posture) return
+
+    const now = Date.now()
+    const raw = msg.posture
+    const s = Number(raw.score ?? 0)
+
+    // EMA smoothing (0.15–0.25 feels good)
+    const alpha = 0.20
+    _emaScore.value = (_emaScore.value == null) ? s : (_emaScore.value * (1 - alpha) + s * alpha)
+
+    // Update tips at most 2x/sec to avoid flicker
+    if (now - _lastTipsAt.value > 500) {
+      _tips.value = Array.isArray(raw.messages) ? raw.messages : []
+      _lastTipsAt.value = now
+    }
+
+    postureSmooth.value = {
+      ...msg,
+      posture: {
+        ...raw,
+        score: _emaScore.value,
+        messages: _tips.value,
+      }
+    }
   }
 })
 </script>
@@ -223,6 +248,7 @@ onMounted(async () => {
 .camImg {
   width: 100%;
   height: 100%;
+  max-width: 100%;
   object-fit: cover;
   display: block;
 }
