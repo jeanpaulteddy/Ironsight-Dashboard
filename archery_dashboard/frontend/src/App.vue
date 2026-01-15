@@ -23,7 +23,9 @@
       <div class="row2">
         <section class="card camera">
           <h2>Camera</h2>
-          <div class="placeholder">Camera stream later</div>
+          <div class="camWrap">
+            <img class="camImg" :src="`http://${location.hostname}:8081/stream`" alt="camera" />
+          </div>
         </section>
 
         <section class="card">
@@ -175,5 +177,21 @@ onMounted(async () => {
 }
 .pmsg.ok {
   opacity: 0.75;
+}
+
+.camWrap {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(0,0,0,0.25);
+}
+
+.camImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 </style>
