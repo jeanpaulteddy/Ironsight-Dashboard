@@ -24,7 +24,7 @@
         <section class="card camera">
           <h2>Camera</h2>
           <div class="camWrap">
-            <img class="camImg" :src="`http://${location.hostname}:8081/stream`" alt="camera" />
+            <img class="camImg" :src="`http://${host}:8081/stream`" alt="camera" />
           </div>
         </section>
 
@@ -55,6 +55,8 @@
 import { ref, onMounted } from "vue"
 import TargetView from "./components/TargetView.vue"
 import ScoreTable from "./components/ScoreTable.vue"
+
+const host = window.location.hostname
 
 const posture = ref(null)
 const shots = ref([])
