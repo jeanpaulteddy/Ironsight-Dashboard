@@ -2,6 +2,7 @@
 import asyncio, time
 from typing import Set
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from pose_udp_listener import start_pose_udp_listener, get_latest_pose
 
 import config
 from scoring import score_from_r
@@ -22,6 +23,10 @@ async def startup():
     # start UDP loop and broadcast loop
     asyncio.create_task(udp_loop(config.UDP_HOST, config.UDP_PORT, queue, CH2COMP))
     asyncio.create_task(dispatch_loop())
+
+@app.on_event("startup")
+def _startup_pose_listener():
+    start_pose_udp_listener(host="0.0.0.0", port=5015)
 
 async def dispatch_loop():
     while True:
@@ -103,3 +108,7 @@ async def set_rings(payload: dict):
 @app.get("/api/shots")
 def get_shots():
     return {"shots": state.all_shots()}
+
+@app.get("/api/posture")
+def api_posture():
+    return {"pose": get_latest_pose()}
