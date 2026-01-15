@@ -113,6 +113,30 @@ onMounted(async () => {
 </script>
 
 <style>
+  .grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  align-items: start;
+  padding: 14px;
+}
+
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.postureInCam {
+  margin-bottom: 10px;
+}
+
+@media (max-width: 1100px) {
+  .grid2 {
+    grid-template-columns: 1fr;
+  }
+}
+
 .page { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; background:#0b0f17; color:#e7ecf5; min-height:100vh; }
 .topbar { padding:16px 18px; border-bottom:1px solid rgba(255,255,255,0.08); }
 .title { font-size:20px; font-weight:700; }
