@@ -71,7 +71,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
         r = math.hypot(x, y)
         
         # Ignore hits unless system is in shooting mode
-        if get_mode_cached() != "shooting":
+        if get_mode_cached(ttl=0.0) != "shooting":
             return
         
         event = {
