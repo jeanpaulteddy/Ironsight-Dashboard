@@ -1,7 +1,7 @@
 # backend/app.py
 import asyncio, time
 from typing import Set
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect # type: ignore
 from pose_udp_listener import start_pose_udp_listener, get_latest_pose
 
 import config
@@ -11,9 +11,23 @@ from udp_listener import udp_loop
 
 app = FastAPI()
 
+_pose_clients: set[WebSocket] = set()
+_pose_queue: asyncio.Queue = asyncio.Queue()
 clients: Set[WebSocket] = set()
 state = SessionState()
 queue: asyncio.Queue = asyncio.Queue(maxsize=200)
+
+async def _pose_broadcaster():
+    while True:
+        msg = await _pose_queue.get()
+        dead = []
+        for ws in list(_pose_clients):
+            try:
+                await ws.send_json(msg)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            _pose_clients.discard(ws)
 
 # Channel mapping (same default you used)
 CH2COMP = {"0": "N", "1": "E", "2": "W", "3": "S"}
@@ -25,8 +39,15 @@ async def startup():
     asyncio.create_task(dispatch_loop())
 
 @app.on_event("startup")
-def _startup_pose_listener():
-    start_pose_udp_listener(host="0.0.0.0", port=5015)
+async def _startup_pose_listener():
+    loop = asyncio.get_running_loop()
+
+    def on_pose(msg: dict):
+        # thread-safe handoff from UDP thread -> asyncio loop
+        loop.call_soon_threadsafe(_pose_queue.put_nowait, msg)
+
+    start_pose_udp_listener(host="0.0.0.0", port=5015, on_pose=on_pose)
+    asyncio.create_task(_pose_broadcaster())
 
 async def dispatch_loop():
     while True:
@@ -87,6 +108,25 @@ async def ws_endpoint(ws: WebSocket):
             await ws.receive_text()
     except WebSocketDisconnect:
         clients.discard(ws)
+
+@app.websocket("/ws_pose")
+async def ws_pose(ws: WebSocket):
+    await ws.accept()
+    _pose_clients.add(ws)
+
+    # send latest pose immediately (if available)
+    latest = get_latest_pose()
+    if latest is not None:
+        await ws.send_json(latest)
+
+    try:
+        # Keep the connection open. We don't require any client messages.
+        while True:
+            await asyncio.sleep(60)
+    except WebSocketDisconnect:
+        _pose_clients.discard(ws)
+    except Exception:
+        _pose_clients.discard(ws)
 
 @app.get("/api/config")
 def get_config():

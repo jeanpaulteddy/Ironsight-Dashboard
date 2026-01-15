@@ -67,16 +67,6 @@ async function clearShots() {
   table.value = await stRes.json()
 }
 
-async function refreshPosture() {
-  try {
-    const r = await fetch("/api/posture")
-    const j = await r.json()
-    posture.value = j.pose
-  } catch (e) {
-    // ignore transient errors
-  }
-}
-
 function postureClass(score) {
   if (score >= 85) return "good"
   if (score >= 70) return "warn"
@@ -106,8 +96,11 @@ onMounted(async () => {
       stateText.value = JSON.stringify(table.value, null, 2)
     }
   }
-  await refreshPosture()
-  setInterval(refreshPosture, 250)
+  const wsPose = new WebSocket(`ws://${location.host}/ws_pose`)
+  wsPose.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data)
+    if (msg?.type === "pose") posture.value = msg
+  }
 })
 </script>
 
