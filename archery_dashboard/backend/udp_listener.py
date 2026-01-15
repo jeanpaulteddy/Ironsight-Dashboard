@@ -2,7 +2,7 @@
 import asyncio, json, math
 from typing import Dict, Any
 import os
-import mode_state
+from mode_state import get_mode
 
 # Keep consistent with your current geometry idea
 D_M = 1.0
@@ -50,8 +50,8 @@ class UDPProtocol(asyncio.DatagramProtocol):
         x, y = xy_from_features(sx, sy)
         r = math.hypot(x, y)
         
-        mode = mode_state.get_mode()
-        print("[UDP] pid=", os.getpid(), "mode_seen=", mode, "mode_state_id=", id(mode_state))
+        mode = get_mode()
+        # print("[UDP] pid=", os.getpid(), "mode_seen=", mode, "mode_state_id=", id(mode_state))
         if mode != "shooting":
             return
 
