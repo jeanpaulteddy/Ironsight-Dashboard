@@ -21,12 +21,12 @@
 
               <div v-if="postureSmooth?.posture" class="posture postureInCam">
                 <div class="pscore" :class="postureClass(postureSmooth.posture.score)">
-                  {{ Math.round(posture.posture.score) }}
+                  {{ Math.round(postureSmooth.posture.score) }}
                 </div>
                 <div class="ptips">
                   <div class="ptitle">Posture</div>
                   <div v-if="postureSmooth.posture.messages?.length" class="pmsg">
-                    {{ posture.posture.messages.join(" • ") }}
+                    {{ postureSmooth.posture.messages.join(" • ") }}
                   </div>
                   <div v-else class="pmsg ok">Looks good</div>
                 </div>
