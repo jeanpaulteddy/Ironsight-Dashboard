@@ -52,6 +52,8 @@ class UDPProtocol(asyncio.DatagramProtocol):
         
         mode = get_mode()
         # print("[UDP] pid=", os.getpid(), "mode_seen=", mode, "mode_state_id=", id(mode_state))
+        print("----------------------THIS IS THE MODE : \n", mode)
+        print("condition", mode != "shooting \n")
         if mode != "shooting":
             return
 
