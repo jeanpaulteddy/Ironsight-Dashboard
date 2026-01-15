@@ -2,6 +2,7 @@
 import asyncio, time
 from typing import Set
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect # type: ignore
+from fastapi.middleware.cors import CORSMiddleware # type: ignore
 from pose_udp_listener import start_pose_udp_listener, get_latest_pose
 
 import config
@@ -10,6 +11,14 @@ from state import SessionState, Shot
 from udp_listener import udp_loop
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],          # dev: allow everything
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 _pose_clients: set[WebSocket] = set()
 _pose_queue: asyncio.Queue = asyncio.Queue()
