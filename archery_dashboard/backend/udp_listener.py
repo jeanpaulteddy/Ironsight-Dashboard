@@ -1,8 +1,11 @@
 # backend/udp_listener.py
 import asyncio, json, math
-from typing import Dict, Any
+from typing import Dict, Any, Callable
 import os
-from mode_state import get_mode
+try:
+    from mode_state import get_mode as default_get_mode
+except Exception:
+    default_get_mode = None
 
 # Keep consistent with your current geometry idea
 D_M = 1.0
@@ -31,9 +34,11 @@ def xy_from_features(sx: float, sy: float):
     return x, y
 
 class UDPProtocol(asyncio.DatagramProtocol):
-    def __init__(self, queue: asyncio.Queue, ch2comp: Dict[str, str]):
+    def __init__(self, queue: asyncio.Queue, ch2comp: Dict[str, str], mode_getter: Callable[[], str] | None = None):
         self.queue = queue
         self.ch2comp = ch2comp
+        # If a mode getter isn't provided, fall back to mode_state.get_mode (if available)
+        self.mode_getter = mode_getter or default_get_mode
 
     def datagram_received(self, data: bytes, addr):
         try:
@@ -50,7 +55,9 @@ class UDPProtocol(asyncio.DatagramProtocol):
         x, y = xy_from_features(sx, sy)
         r = math.hypot(x, y)
         
-        mode = get_mode()
+        mode = self.mode_getter() if self.mode_getter else None
+        if mode is None:
+            return
         # print("[UDP] pid=", os.getpid(), "mode_seen=", mode, "mode_state_id=", id(mode_state))
         print("----------------------THIS IS THE MODE : \n", mode)
         print("condition", mode != "shooting \n")
@@ -70,11 +77,11 @@ class UDPProtocol(asyncio.DatagramProtocol):
         except asyncio.QueueFull:
             pass
 
-async def udp_loop(host: str, port: int, queue: asyncio.Queue, ch2comp: Dict[str, str], mode):
-    print(f"[LALALALALA] mode is : {mode()}")
+async def udp_loop(host: str, port: int, queue: asyncio.Queue, ch2comp: Dict[str, str], mode_getter):
+    print(f"[LALALALALA] mode is : {mode_getter()}")
     loop = asyncio.get_running_loop()
     transport, _ = await loop.create_datagram_endpoint(
-        lambda: UDPProtocol(queue, ch2comp),
+        lambda: UDPProtocol(queue, ch2comp, mode_getter=mode_getter),
         local_addr=(host, port),
     )
     try:
