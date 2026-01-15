@@ -5,47 +5,52 @@
     </header>
 
     <main>
-      <div class="grid">
-        <section class="card">
-          <div class="cardhead">
-            <h2>Target</h2>
-            <button class="btn" @click="clearShots">Clear</button>
-          </div>
-          <TargetView v-if="Object.keys(rings).length" :shots="shots" :rings="rings" />
-        </section>
+        <div class="grid2">
+          <!-- LEFT COLUMN -->
+          <div class="col">
+            <section class="card camera">
+              <h2>Camera</h2>
 
-        <section class="card">
-          <h2>Scorecard</h2>
-          <ScoreTable :table="table" />
-        </section>
-      </div>
-
-      <div class="row2">
-        <section class="card camera">
-          <h2>Camera</h2>
-          <div v-if="posture?.posture" class="posture">
-            <div class="pscore" :class="postureClass(posture.posture.score)">
-              {{ Math.round(posture.posture.score) }}
-            </div>
-            <div class="ptips">
-              <div class="ptitle">Posture</div>
-              <div v-if="posture.posture.messages?.length" class="pmsg">
-                {{ posture.posture.messages.join(" • ") }}
+              <div v-if="posture?.posture" class="posture postureInCam">
+                <div class="pscore" :class="postureClass(posture.posture.score)">
+                  {{ Math.round(posture.posture.score) }}
+                </div>
+                <div class="ptips">
+                  <div class="ptitle">Posture</div>
+                  <div v-if="posture.posture.messages?.length" class="pmsg">
+                    {{ posture.posture.messages.join(" • ") }}
+                  </div>
+                  <div v-else class="pmsg ok">Looks good</div>
+                </div>
               </div>
-              <div v-else class="pmsg ok">Looks good</div>
-            </div>
-          </div>
-          <div class="camWrap">
-            <img class="camImg" :src="`http://${host}:8081/stream`" alt="camera" />
-          </div>
-        </section>
 
-        <section class="card">
-          <h2>Status</h2>
-          
-          <pre class="mono">{{ stateText }}</pre>
-        </section>
-      </div>
+              <div class="camWrap">
+                <img class="camImg" :src="`http://${host}:8081/stream`" alt="camera" />
+              </div>
+            </section>
+
+            <section class="card">
+              <div class="cardhead">
+                <h2>Target</h2>
+                <button class="btn" @click="clearShots">Clear</button>
+              </div>
+              <TargetView v-if="Object.keys(rings).length" :shots="shots" :rings="rings" />
+            </section>
+          </div>
+
+          <!-- RIGHT COLUMN -->
+          <div class="col">
+            <section class="card">
+              <h2>Scorecard</h2>
+              <ScoreTable :table="table" />
+            </section>
+
+            <section class="card">
+              <h2>Status</h2>
+              <pre class="mono">{{ stateText }}</pre>
+            </section>
+          </div>
+        </div>
     </main>
   </div>
 </template>
