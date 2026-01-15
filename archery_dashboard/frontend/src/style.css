@@ -11,7 +11,7 @@ html, body {
 /* Layout: allow scrolling and keep Target + Scoreboard side-by-side on the first row */
 .grid {
   display: grid;
-  grid-template-columns: 1.2fr 1fr;
+  grid-template-columns: 1fr 1.2fr;
   gap: 14px;
   padding: 14px;
   box-sizing: border-box;
