@@ -87,7 +87,7 @@ onMounted(async () => {
   for (const [k, v] of Object.entries(cfg.RINGS_M)) out[String(k)] = v
   rings.value = out
 
-  const ws = new WebSocket(`ws://${location.host}/ws`)
+  const ws = new WebSocket(`ws://${location.hostname}:8000/ws`)
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data)
     if (msg.type === "shot") {
@@ -96,7 +96,7 @@ onMounted(async () => {
       stateText.value = JSON.stringify(table.value, null, 2)
     }
   }
-  const wsPose = new WebSocket(`ws://${location.host}/ws_pose`)
+  const wsPose = new WebSocket(`ws://${location.hostname}:8000/ws_pose`)
   wsPose.onmessage = (ev) => {
     const msg = JSON.parse(ev.data)
     if (msg?.type === "pose") posture.value = msg
