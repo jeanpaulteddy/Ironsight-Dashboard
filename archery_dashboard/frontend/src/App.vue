@@ -23,14 +23,6 @@
       <div class="row2">
         <section class="card camera">
           <h2>Camera</h2>
-          <div class="camWrap">
-            <img class="camImg" :src="`http://${host}:8081/stream`" alt="camera" />
-          </div>
-        </section>
-
-        <section class="card">
-          <h2>Status</h2>
-
           <div v-if="posture?.posture" class="posture">
             <div class="pscore" :class="postureClass(posture.posture.score)">
               {{ Math.round(posture.posture.score) }}
@@ -43,7 +35,14 @@
               <div v-else class="pmsg ok">Looks good</div>
             </div>
           </div>
+          <div class="camWrap">
+            <img class="camImg" :src="`http://${host}:8081/stream`" alt="camera" />
+          </div>
+        </section>
 
+        <section class="card">
+          <h2>Status</h2>
+          
           <pre class="mono">{{ stateText }}</pre>
         </section>
       </div>
@@ -195,5 +194,8 @@ onMounted(async () => {
   height: 100%;
   object-fit: cover;
   display: block;
+}
+.postureInCam {
+  margin-bottom: 10px;
 }
 </style>
