@@ -83,6 +83,11 @@ class UDPProtocol(asyncio.DatagramProtocol):
         }
 
         try:
+            mode = get_mode_cached(ttl=0.0)
+            print("[UDP] mode =", mode)
+            if mode != "shooting":
+                print("[UDP] blocked hit_bundle (scoring mode)")
+                return
             self.queue.put_nowait(event)
         except asyncio.QueueFull:
             pass
