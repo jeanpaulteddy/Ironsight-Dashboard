@@ -74,7 +74,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount } from "vue"
+import { ref, onMounted } from "vue"
 import TargetView from "./components/TargetView.vue"
 import ScoreTable from "./components/ScoreTable.vue"
 
@@ -173,8 +173,6 @@ onMounted(async () => {
     }
   }
   await refreshMode()
-  const modeTimer = setInterval(refreshMode, 1000)
-  onBeforeUnmount(() => clearInterval(modeTimer))
 })
 </script>
 
