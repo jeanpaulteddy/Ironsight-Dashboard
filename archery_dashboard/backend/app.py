@@ -23,6 +23,8 @@ calibration = {
     "paused": False,
 }
 
+calibration_fit = None
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],          # dev: allow everything
@@ -325,6 +327,9 @@ def cal_compute():
         "d": float(py[0]), "e": float(py[1]), "f": float(py[2]),
     }
 
+    global calibration_fit
+    calibration_fit = {"model":"affine_sxsy","params": params}
+
     calibration["fit"] = {
         "model": "affine_sxsy",
         "params": params,
@@ -334,4 +339,8 @@ def cal_compute():
     }
 
     return {"ok": True, **calibration["fit"]}
+
+@app.get("/api/calibration/fit")
+def cal_fit():
+    return {"ok": True, "fit": calibration_fit}
 

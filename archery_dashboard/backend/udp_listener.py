@@ -7,6 +7,8 @@ try:
 except Exception:
     default_get_mode = None
 
+from urllib.request import urlopen, Request
+
 # Keep consistent with your current geometry idea
 D_M = 1.0
 HALF_SPAN = D_M / 2.0
@@ -53,6 +55,19 @@ class UDPProtocol(asyncio.DatagramProtocol):
 
         sx, sy = features_from_peaks(comp["N"], comp["E"], comp["W"], comp["S"])
         x, y = xy_from_features(sx, sy)
+        # apply affine calibration if backend has one
+        try:
+            req = Request("http://127.0.0.1:8000/api/calibration/fit", headers={"Accept": "application/json"})
+            with urlopen(req, timeout=0.2) as r:
+                data = json.loads(r.read().decode("utf-8"))
+                fit = data.get("fit")
+                if fit and fit.get("model") == "affine_sxsy":
+                    p = fit["params"]
+                    x = p["a"]*sx + p["b"]*sy + p["c"]
+                    y = p["d"]*sx + p["e"]*sy + p["f"]
+        except Exception:
+            pass
+
         r = math.hypot(x, y)
         
         mode = self.mode_getter() if self.mode_getter else None
