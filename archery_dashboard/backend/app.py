@@ -246,6 +246,7 @@ def cal_start():
     calibration["paused"] = False
     calibration["pending"] = None
     calibration["samples"] = []
+    calibration.pop("fit", None)
     return {"ok": True, "active": True}
 
 @app.get("/api/calibration/status")
