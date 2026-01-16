@@ -106,7 +106,7 @@ async function startCal() {
 }
 
 function resumeSet() {
-    await fetch(`${API}/api/calibration/resume`, { method: "POST" })
+    fetch(`${API}/api/calibration/resume`, { method: "POST" })
     paused.value = false
     inSet.value = 0
     pending.value = null
