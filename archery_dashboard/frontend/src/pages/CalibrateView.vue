@@ -14,6 +14,16 @@
       <button v-if="done" class="btn" @click="computeCal">Compute calibration</button>
     </div>
 
+    <div v-if="fit || fitErr" class="fitBox">
+        <div v-if="fitErr" class="fitErr">Compute error: {{ fitErr }}</div>
+        <div v-else class="fitOk">
+            <div class="fitTitle">Fit results</div>
+            <div class="fitRow">Mean error: <b>{{ fit.mean_error_cm.toFixed(2) }} cm</b></div>
+            <div class="fitRow">Max error: <b>{{ fit.max_error_cm.toFixed(2) }} cm</b></div>
+            <div class="fitRow">Samples used: <b>{{ fit.n }}</b></div>
+        </div>
+    </div>
+
     <div v-if="paused" class="pauseOverlay">
       <div class="pauseCard">
         <div class="pauseTitle">Pause</div>
@@ -57,6 +67,8 @@ const sampleCount = ref(0)
 const perSet = 3
 const inSet = ref(0)
 const paused = ref(false)
+const fit = ref(null)
+const fitErr = ref(null)
 
 const totalTarget = 20
 const done = computed(() => sampleCount.value >= totalTarget)
@@ -100,8 +112,20 @@ function resumeSet() {
   pendingDot.value = []
 }
 
-function computeCal() {
-  alert("Next step: compute calibration on backend")
+async function computeCal() {
+  fitErr.value = null
+  fit.value = null
+  try {
+    const r = await fetch(`${API}/api/calibration/compute`, { method: "POST" })
+    const j = await r.json()
+    if (!j.ok) {
+      fitErr.value = j.error || "compute failed"
+      return
+    }
+    fit.value = j
+  } catch (e) {
+    fitErr.value = String(e)
+  }
 }
 
 function onTargetClick(ev) {
@@ -246,4 +270,15 @@ onMounted(async () => {
 }
 .pauseTitle{ font-size: 18px; font-weight: 900; margin-bottom: 6px; }
 .pauseText{ opacity: 0.85; margin-bottom: 12px; }
+
+.fitBox{
+  margin: 10px 0 14px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.05);
+}
+.fitTitle{ font-weight: 900; margin-bottom: 6px; }
+.fitRow{ font-size: 13px; opacity: 0.9; margin: 2px 0; }
+.fitErr{ color: rgba(255,120,120,0.95); font-weight: 800; }
 </style>
