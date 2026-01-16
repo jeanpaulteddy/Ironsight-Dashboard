@@ -106,10 +106,11 @@ async function startCal() {
 }
 
 function resumeSet() {
-  paused.value = false
-  inSet.value = 0
-  pending.value = null
-  pendingDot.value = []
+    fetch(`${API}/api/calibration/resume`, { method: "POST" })
+    paused.value = false
+    inSet.value = 0
+    pending.value = null
+    pendingDot.value = []
 }
 
 async function computeCal() {
@@ -163,6 +164,7 @@ function onTargetClick(ev) {
       inSet.value += 1
       if (inSet.value >= perSet) {
         paused.value = true
+        fetch(`${API}/api/calibration/pause`, { method: "POST" })
       }
     }
   })

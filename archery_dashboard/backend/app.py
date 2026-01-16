@@ -4,7 +4,7 @@ from typing import Set
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect # type: ignore
 from fastapi.middleware.cors import CORSMiddleware # type: ignore
 from pose_udp_listener import start_pose_udp_listener, get_latest_pose
-import numpy as np
+import numpy as np # type: ignore
 import config
 from scoring import score_from_r
 from state import SessionState, Shot
@@ -19,7 +19,8 @@ app = FastAPI()
 calibration = {
     "active": False,
     "pending": None,
-    "samples": []
+    "samples": [],
+    "paused": False,
 }
 
 app.add_middleware(
@@ -86,10 +87,14 @@ async def _startup_pose_listener():
 async def dispatch_loop():
     while True:
         evt = await queue.get()
-
         # If we're calibrating, capture a pending shot instead of recording it
         if calibration.get("active"):
             # Only accept one pending shot at a time
+            
+            if calibration.get("paused"):
+                calibration["pending"] = None
+                continue
+
             if calibration.get("pending") is None:
                 pending = {
                     "ts": time.time(),
@@ -238,6 +243,7 @@ def api_set_mode(payload: ModeIn):
 @app.post("/api/calibration/start")
 def cal_start():
     calibration["active"] = True
+    calibration["paused"] = False
     calibration["pending"] = None
     calibration["samples"] = []
     return {"ok": True, "active": True}
@@ -315,3 +321,15 @@ def cal_compute():
     }
 
     return {"ok": True, **calibration["fit"]}
+
+@app.post("/api/calibration/pause")
+def cal_pause():
+    calibration["paused"] = True
+    calibration["pending"] = None  # clear any pending to avoid freezing
+    return {"ok": True, "paused": True}
+
+@app.post("/api/calibration/resume")
+def cal_resume():
+    calibration["paused"] = False
+    calibration["pending"] = None
+    return {"ok": True, "paused": False}
