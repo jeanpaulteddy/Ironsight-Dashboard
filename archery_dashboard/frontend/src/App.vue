@@ -2,6 +2,20 @@
   <div class="page">
     <header class="topbar">
       <div class="title">IronSight Dashboard</div>
+      <div class="modebar">
+      <div class="modebadge" :class="mode">
+        Mode: {{ mode }}
+      </div>
+
+      <div class="modebtns">
+        <button class="btn" :class="{ active: mode==='shooting' }" @click="setMode('shooting')">
+          Shooting
+        </button>
+        <button class="btn" :class="{ active: mode==='scoring' }" @click="setMode('scoring')">
+          Scoring
+        </button>
+      </div>
+    </div>
     </header>
 
     <main>
@@ -77,6 +91,23 @@ const _emaScore = ref(null)            // running average
 const _lastTipsAt = ref(0)             // rate limit tips text
 const _tips = ref([])                  // stable tips array
 
+const mode = ref("shooting")
+
+async function refreshMode() {
+  const r = await fetch(`${API}/api/mode`)
+  const j = await r.json()
+  mode.value = j.mode || "shooting"
+}
+
+async function setMode(newMode) {
+  await fetch(`${API}/api/mode`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode: newMode }),
+  })
+  await refreshMode()
+}
+
 async function clearShots() {
   await fetch(`${API}/api/reset`, { method: "POST" })
   shots.value = []
@@ -141,6 +172,7 @@ onMounted(async () => {
       }
     }
   }
+  await refreshMode()
 })
 </script>
 
@@ -275,4 +307,16 @@ onMounted(async () => {
 .card.camera {
   overflow: hidden;
 }
+
+.modebar{ display:flex; align-items:center; gap:12px; margin-top:10px; flex-wrap:wrap; }
+.modebadge{
+  padding:8px 12px; border-radius:12px; font-weight:800;
+  border:1px solid rgba(255,255,255,0.12);
+  background:rgba(255,255,255,0.06);
+}
+.modebadge.shooting{ box-shadow:0 0 0 1px rgba(80,200,255,0.25) inset; }
+.modebadge.scoring{ box-shadow:0 0 0 1px rgba(255,200,80,0.25) inset; }
+
+.modebtns{ display:flex; gap:8px; }
+.btn.active{ outline:2px solid rgba(255,255,255,0.25); }
 </style>
