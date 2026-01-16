@@ -45,6 +45,9 @@ const API = `http://${host}:8000`
 const rings = ref({})
 const pending = ref(null)
 const sampleCount = ref(0)
+const perSet = 3
+const inSet = ref(0)
+const paused = ref(false)
 
 // show a faint dot for the detected (uncalibrated) location so you can compare
 const pendingDot = ref([])
@@ -74,6 +77,8 @@ async function startCal() {
   pending.value = null
   pendingDot.value = []
   sampleCount.value = 0
+  inSet.value = 0
+  paused.value = false
 }
 
 function onTargetClick(ev) {
