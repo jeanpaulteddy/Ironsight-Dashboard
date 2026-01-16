@@ -16,6 +16,12 @@ from mode_state import get_mode, set_mode
 
 app = FastAPI()
 
+calibration = {
+    "active": False,
+    "pending": None,
+    "samples": []
+}
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],          # dev: allow everything
@@ -81,6 +87,42 @@ async def dispatch_loop():
     while True:
         evt = await queue.get()
 
+        # If we're calibrating, capture a pending shot instead of recording it
+        if calibration.get("active"):
+            # Only accept one pending shot at a time
+            if calibration.get("pending") is None:
+                pending = {
+                    "ts": time.time(),
+                    # raw features if provided by udp_listener.py (optional)
+                    "sx": evt.get("sx"),
+                    "sy": evt.get("sy"),
+                    # current (uncalibrated) position
+                    "x": evt.get("x"),
+                    "y": evt.get("y"),
+                    "r": evt.get("r"),
+                    "raw": evt.get("raw"),
+                }
+                calibration["pending"] = pending
+
+                payload = {
+                    "type": "cal_pending",
+                    "pending": pending,
+                    "count": len(calibration.get("samples", [])),
+                }
+
+                dead = []
+                for ws in list(clients):
+                    try:
+                        await ws.send_json(payload)
+                    except Exception:
+                        dead.append(ws)
+                for ws in dead:
+                    clients.discard(ws)
+
+            # Do not update normal scoring/state while calibrating
+            continue
+
+        # Normal mode: compute score + record shot
         score, is_x = score_from_r(evt["r"])
         shot = Shot(
             ts=time.time(),
@@ -192,3 +234,28 @@ def api_set_mode(payload: ModeIn):
     after = get_mode()
     print("[MODE] before=", before, "requested=", payload.mode, "after=", after)
     return {"mode": after}
+
+@app.post("/api/calibration/start")
+def cal_start():
+    calibration["active"] = True
+    calibration["pending"] = None
+    calibration["samples"] = []
+    return {"ok": True, "active": True}
+
+@app.get("/api/calibration/status")
+def cal_status():
+    return calibration
+
+@app.post("/api/calibration/confirm")
+def cal_confirm(payload: dict):
+    # payload: {x_gt: float, y_gt: float}
+    if not calibration["active"]:
+        return {"ok": False, "error": "not active"}
+    if calibration["pending"] is None:
+        return {"ok": False, "error": "no pending shot"}
+    x_gt = float(payload.get("x_gt"))
+    y_gt = float(payload.get("y_gt"))
+    sample = {**calibration["pending"], "x_gt": x_gt, "y_gt": y_gt}
+    calibration["samples"].append(sample)
+    calibration["pending"] = None
+    return {"ok": True, "count": len(calibration["samples"])}
