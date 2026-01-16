@@ -66,6 +66,8 @@ class UDPProtocol(asyncio.DatagramProtocol):
 
         event = {
             "src_ip": addr[0],
+            "sx": sx,
+            "sy": sy,
             "x": x,
             "y": y,
             "r": r,
