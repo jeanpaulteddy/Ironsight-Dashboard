@@ -4,7 +4,7 @@ from typing import Set
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect # type: ignore
 from fastapi.middleware.cors import CORSMiddleware # type: ignore
 from pose_udp_listener import start_pose_udp_listener, get_latest_pose
-
+import numpy as np
 import config
 from scoring import score_from_r
 from state import SessionState, Shot
@@ -259,3 +259,59 @@ def cal_confirm(payload: dict):
     calibration["samples"].append(sample)
     calibration["pending"] = None
     return {"ok": True, "count": len(calibration["samples"])}
+
+@app.post("/api/calibration/compute")
+def cal_compute():
+    samples = calibration.get("samples", [])
+    if len(samples) < 6:
+        return {"ok": False, "error": "need at least 6 samples", "count": len(samples)}
+
+    # Build least-squares system
+    # rows: [sx, sy, 1] -> x_gt and y_gt
+    A = []
+    bx = []
+    by = []
+    for s in samples:
+        sx = s.get("sx")
+        sy = s.get("sy")
+        x_gt = s.get("x_gt")
+        y_gt = s.get("y_gt")
+        if sx is None or sy is None or x_gt is None or y_gt is None:
+            continue
+        A.append([float(sx), float(sy), 1.0])
+        bx.append(float(x_gt))
+        by.append(float(y_gt))
+
+    if len(A) < 6:
+        return {"ok": False, "error": "not enough valid samples", "count": len(A)}
+
+    A = np.array(A, dtype=np.float64)
+    bx = np.array(bx, dtype=np.float64)
+    by = np.array(by, dtype=np.float64)
+
+    # Solve A * px ~= bx, A * py ~= by
+    px, *_ = np.linalg.lstsq(A, bx, rcond=None)  # [a,b,c]
+    py, *_ = np.linalg.lstsq(A, by, rcond=None)  # [d,e,f]
+
+    # Compute errors
+    x_hat = A @ px
+    y_hat = A @ py
+    err = np.sqrt((x_hat - bx) ** 2 + (y_hat - by) ** 2)
+
+    mean_cm = float(err.mean() * 100.0)
+    max_cm = float(err.max() * 100.0)
+
+    params = {
+        "a": float(px[0]), "b": float(px[1]), "c": float(px[2]),
+        "d": float(py[0]), "e": float(py[1]), "f": float(py[2]),
+    }
+
+    calibration["fit"] = {
+        "model": "affine_sxsy",
+        "params": params,
+        "mean_error_cm": mean_cm,
+        "max_error_cm": max_cm,
+        "n": int(len(err)),
+    }
+
+    return {"ok": True, **calibration["fit"]}
