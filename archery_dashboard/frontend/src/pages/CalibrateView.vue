@@ -13,6 +13,14 @@
       <button class="btn" @click="startCal">Restart calibration</button>
     </div>
 
+    <div v-if="paused" class="pauseOverlay">
+      <div class="pauseCard">
+        <div class="pauseTitle">Pause</div>
+        <div class="pauseText">Go pull your arrows, then come back.</div>
+        <button class="btn" @click="resumeSet">Resume</button>
+      </div>
+    </div>
+
     <div class="targetWrap">
       <div
         v-if="Object.keys(rings).length"
@@ -81,7 +89,15 @@ async function startCal() {
   paused.value = false
 }
 
+function resumeSet() {
+  paused.value = false
+  inSet.value = 0
+  pending.value = null
+  pendingDot.value = []
+}
+
 function onTargetClick(ev) {
+  if (paused.value) return
   if (!pending.value) return // ignore clicks until a shot is pending
 
   const rect = ev.currentTarget.getBoundingClientRect()
@@ -110,6 +126,11 @@ function onTargetClick(ev) {
       sampleCount.value = j.count
       pending.value = null
       pendingDot.value = []
+
+      inSet.value += 1
+      if (inSet.value >= perSet) {
+        paused.value = true
+      }
     }
   })
 }
@@ -126,6 +147,7 @@ onMounted(async () => {
     const msg = JSON.parse(ev.data)
 
     if (msg.type === "cal_pending") {
+      if (paused.value) return
       pending.value = msg.pending
       sampleCount.value = msg.count ?? sampleCount.value
 
@@ -194,4 +216,24 @@ onMounted(async () => {
 .info{ text-align:center; }
 .hint{ opacity:0.9; font-weight:700; }
 .hint.muted{ opacity:0.65; font-weight:600; }
+
+.pauseOverlay{
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+.pauseCard{
+  width: min(420px, 92vw);
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 18px;
+  padding: 16px;
+  text-align: center;
+}
+.pauseTitle{ font-size: 18px; font-weight: 900; margin-bottom: 6px; }
+.pauseText{ opacity: 0.85; margin-bottom: 12px; }
 </style>
