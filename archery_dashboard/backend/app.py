@@ -249,6 +249,18 @@ def cal_start():
     calibration.pop("fit", None)
     return {"ok": True, "active": True}
 
+@app.post("/api/calibration/pause")
+def cal_pause():
+    calibration["paused"] = True
+    calibration["pending"] = None  # clear any pending to avoid freezing
+    return {"ok": True, "paused": True}
+
+@app.post("/api/calibration/resume")
+def cal_resume():
+    calibration["paused"] = False
+    calibration["pending"] = None
+    return {"ok": True, "paused": False}
+
 @app.get("/api/calibration/status")
 def cal_status():
     return calibration
@@ -323,14 +335,3 @@ def cal_compute():
 
     return {"ok": True, **calibration["fit"]}
 
-@app.post("/api/calibration/pause")
-def cal_pause():
-    calibration["paused"] = True
-    calibration["pending"] = None  # clear any pending to avoid freezing
-    return {"ok": True, "paused": True}
-
-@app.post("/api/calibration/resume")
-def cal_resume():
-    calibration["paused"] = False
-    calibration["pending"] = None
-    return {"ok": True, "paused": False}
