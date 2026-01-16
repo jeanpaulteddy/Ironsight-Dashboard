@@ -6,11 +6,12 @@
     </header>
 
     <div class="hud">
-      <div class="pill">Samples: {{ sampleCount }}/20</div>
+      <div class="pill">Samples: {{ sampleCount }}/{{ totalTarget }}</div>
       <div class="pill" :class="pending ? 'warn' : ''">
-        {{ pending ? "Shot detected → click the real hit" : "Waiting for shot…" }}
+        {{ done ? "Calibration complete ✅" : (pending ? "Shot detected → click the real hit" : "Waiting for shot…") }}
       </div>
       <button class="btn" @click="startCal">Restart calibration</button>
+      <button v-if="done" class="btn" @click="computeCal">Compute calibration</button>
     </div>
 
     <div v-if="paused" class="pauseOverlay">
@@ -44,7 +45,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from "vue"
+import { ref, onMounted, computed } from "vue"
 import TargetView from "../components/TargetView.vue"
 
 const host = location.hostname
@@ -56,6 +57,9 @@ const sampleCount = ref(0)
 const perSet = 3
 const inSet = ref(0)
 const paused = ref(false)
+
+const totalTarget = 20
+const done = computed(() => sampleCount.value >= totalTarget)
 
 // show a faint dot for the detected (uncalibrated) location so you can compare
 const pendingDot = ref([])
@@ -96,7 +100,12 @@ function resumeSet() {
   pendingDot.value = []
 }
 
+function computeCal() {
+  alert("Next step: compute calibration on backend")
+}
+
 function onTargetClick(ev) {
+  if (done.value) return
   if (paused.value) return
   if (!pending.value) return // ignore clicks until a shot is pending
 
@@ -147,6 +156,7 @@ onMounted(async () => {
     const msg = JSON.parse(ev.data)
 
     if (msg.type === "cal_pending") {
+      if (done.value) return
       if (paused.value) return
       pending.value = msg.pending
       sampleCount.value = msg.count ?? sampleCount.value
