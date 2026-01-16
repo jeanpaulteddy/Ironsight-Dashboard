@@ -12,7 +12,7 @@
           Shooting
         </button>
         <button class="btn" :class="{ active: mode==='scoring' }" @click="setMode('scoring')">
-          Scoring
+          Walk / Pull arrows
         </button>
       </div>
     </div>
@@ -74,7 +74,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from "vue"
+import { ref, onMounted, onBeforeUnmount } from "vue"
 import TargetView from "./components/TargetView.vue"
 import ScoreTable from "./components/ScoreTable.vue"
 
@@ -173,6 +173,8 @@ onMounted(async () => {
     }
   }
   await refreshMode()
+  const modeTimer = setInterval(refreshMode, 1000)
+  onBeforeUnmount(() => clearInterval(modeTimer))
 })
 </script>
 
@@ -314,8 +316,14 @@ onMounted(async () => {
   border:1px solid rgba(255,255,255,0.12);
   background:rgba(255,255,255,0.06);
 }
-.modebadge.shooting{ box-shadow:0 0 0 1px rgba(80,200,255,0.25) inset; }
-.modebadge.scoring{ box-shadow:0 0 0 1px rgba(255,200,80,0.25) inset; }
+.modebadge.shooting{
+  background: rgba(80,200,255,0.14);
+  border-color: rgba(80,200,255,0.25);
+}
+.modebadge.scoring{
+  background: rgba(255,200,80,0.14);
+  border-color: rgba(255,200,80,0.25);
+}
 
 .modebtns{ display:flex; gap:8px; }
 .btn.active{ outline:2px solid rgba(255,255,255,0.25); }
