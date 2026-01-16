@@ -111,6 +111,7 @@ function onTargetClick(ev) {
 
 onMounted(async () => {
   await loadRings()
+  await startCal()
 
   // start calibration automatically if you want:
   // await startCal()
