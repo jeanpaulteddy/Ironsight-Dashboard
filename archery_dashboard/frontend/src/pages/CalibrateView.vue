@@ -5,19 +5,31 @@
       <a class="link" href="/">← Back</a>
     </header>
 
+    <div class="hud">
+      <div class="pill">Samples: {{ sampleCount }}/20</div>
+      <div class="pill" :class="pending ? 'warn' : ''">
+        {{ pending ? "Shot detected → click the real hit" : "Waiting for shot…" }}
+      </div>
+      <button class="btn" @click="startCal">Restart calibration</button>
+    </div>
+
     <div class="targetWrap">
-      <TargetView
-        :shots="[]"
-        :rings="rings"
-        @click.native="onTargetClick"
-      />
+      <div
+        v-if="Object.keys(rings).length"
+        class="targetClick"
+        @click="onTargetClick"
+      >
+        <TargetView :shots="pendingDot" :rings="rings" />
+      </div>
+      <div v-else class="loading">Loading target…</div>
     </div>
 
     <div class="info">
-      <div>Click on the target where the arrow hit</div>
-      <div v-if="lastClick">
-        Last click → x: {{ lastClick.x.toFixed(3) }},
-        y: {{ lastClick.y.toFixed(3) }}
+      <div v-if="pending" class="hint">
+        Click on the target where the arrow actually hit.
+      </div>
+      <div v-else class="hint muted">
+        Shoot an arrow (or UDP-inject) to create a pending calibration shot.
       </div>
     </div>
   </div>
@@ -27,17 +39,46 @@
 import { ref, onMounted } from "vue"
 import TargetView from "../components/TargetView.vue"
 
-const rings = ref({})
-const lastClick = ref(null)
+const host = location.hostname
+const API = `http://${host}:8000`
 
-onMounted(async () => {
-  const cfg = await fetch("/api/config").then(r => r.json())
+const rings = ref({})
+const pending = ref(null)
+const sampleCount = ref(0)
+
+// show a faint dot for the detected (uncalibrated) location so you can compare
+const pendingDot = ref([])
+
+async function loadRings() {
+  const cfg = await fetch(`${API}/api/config`).then(r => r.json())
   const out = {}
   for (const [k, v] of Object.entries(cfg.RINGS_M)) out[String(k)] = v
   rings.value = out
-})
+}
+
+function outerRadiusM() {
+  // outer scoring ring ("1") is our full target radius in meters
+  // fallback: max numeric ring
+  if (typeof rings.value["1"] === "number") return rings.value["1"]
+  let mx = 0
+  for (const [k, v] of Object.entries(rings.value)) {
+    if (k === "X") continue
+    const num = Number(k)
+    if (Number.isFinite(num) && typeof v === "number") mx = Math.max(mx, v)
+  }
+  return mx || 0.5
+}
+
+async function startCal() {
+  await fetch(`${API}/api/calibration/start`, { method: "POST" })
+  pending.value = null
+  pendingDot.value = []
+  sampleCount.value = 0
+}
 
 function onTargetClick(ev) {
+  if (!pending.value) return // ignore clicks until a shot is pending
+
   const rect = ev.currentTarget.getBoundingClientRect()
   const cx = rect.left + rect.width / 2
   const cy = rect.top + rect.height / 2
@@ -46,12 +87,55 @@ function onTargetClick(ev) {
   const py = ev.clientY - cy
 
   const radiusPx = rect.width / 2
-  const x = px / radiusPx
-  const y = -py / radiusPx   // invert Y to match target coords
+  const nx = px / radiusPx
+  const ny = -py / radiusPx // invert y
 
-  lastClick.value = { x, y }
-  console.log("[CAL] click", lastClick.value)
+  // convert normalized coords -> meters using outer ring radius
+  const Rm = outerRadiusM()
+  const x_gt = nx * Rm
+  const y_gt = ny * Rm
+
+  fetch(`${API}/api/calibration/confirm`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ x_gt, y_gt }),
+  }).then(async (r) => {
+    const j = await r.json()
+    if (j.ok) {
+      sampleCount.value = j.count
+      pending.value = null
+      pendingDot.value = []
+    }
+  })
 }
+
+onMounted(async () => {
+  await loadRings()
+
+  // start calibration automatically if you want:
+  // await startCal()
+
+  const ws = new WebSocket(`ws://${host}:8000/ws`)
+  ws.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data)
+
+    if (msg.type === "cal_pending") {
+      pending.value = msg.pending
+      sampleCount.value = msg.count ?? sampleCount.value
+
+      // show detected dot (uncalibrated) in the target as reference
+      if (msg.pending && typeof msg.pending.x === "number" && typeof msg.pending.y === "number") {
+        pendingDot.value = [{
+          ts: msg.pending.ts || Date.now()/1000,
+          x: msg.pending.x,
+          y: msg.pending.y,
+          r: msg.pending.r || 0,
+          score: 0
+        }]
+      }
+    }
+  }
+})
 </script>
 
 <style>
@@ -62,24 +146,46 @@ function onTargetClick(ev) {
   font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
   padding: 18px;
 }
-.top{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  margin-bottom:14px;
-}
+.top{ display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
 .title{ font-size:20px; font-weight:800; }
 .link{ color:#9ad; text-decoration:none; }
 
-.targetWrap{
+.hud{
   display:flex;
-  justify-content:center;
-  margin: 20px 0;
+  gap:10px;
+  align-items:center;
+  flex-wrap:wrap;
+  margin-bottom: 14px;
+}
+.pill{
+  padding: 8px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.06);
+  font-weight: 700;
+  font-size: 12px;
+}
+.pill.warn{
+  border-color: rgba(255,200,80,0.22);
+  background: rgba(255,200,80,0.10);
 }
 
-.info{
-  text-align:center;
-  opacity:0.85;
-  font-size:14px;
+.btn{
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.08);
+  color: #e7ecf5;
+  font-weight: 800;
+  cursor: pointer;
 }
+
+.targetWrap{ display:flex; justify-content:center; margin: 10px 0 14px; }
+.targetClick{ width: min(520px, 92vw); }
+
+.loading{ opacity:0.75; padding: 20px; }
+
+.info{ text-align:center; }
+.hint{ opacity:0.9; font-weight:700; }
+.hint.muted{ opacity:0.65; font-weight:600; }
 </style>
