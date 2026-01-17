@@ -117,29 +117,37 @@ class UDPProtocol(asyncio.DatagramProtocol):
 
         energy = comp["N"] + comp["E"] + comp["W"] + comp["S"]
 
-        prev_ema = self._energy_ema
-        if prev_ema == 0.0:
-            prev_ema = energy
+        # EMA baseline (keep previous for delta explanation)
+        ema_prev = self._energy_ema
+        if ema_prev == 0.0:
+            ema_prev = energy
             self._energy_ema = energy
 
-        delta = energy - prev_ema
+        delta = energy - ema_prev
 
         # Always update baseline (EMA)
         self._energy_ema = (1 - self._ema_alpha) * self._energy_ema + self._ema_alpha * energy
+        ema_now = self._energy_ema
 
-        # Decide label
-        label = None
+        # Classify + explain
+        label = "HIT"
+        reason = "pass"
+
         if energy < self.min_energy:
-            label = "GHOST_ENERGY"
+            label = "GHOST"
+            reason = f"energy<{self.min_energy:.1f}"
         elif delta < self.min_jump:
-            label = "GHOST_JUMP"
-        else:
-            label = "HIT"
+            label = "GHOST"
+            reason = f"delta<{self.min_jump:.1f}"
 
         # Print everything above a floor to avoid spam
-        if self.debug_print and energy >= self.ghost_floor:
-            print(f"[{label}] energy={energy:7.1f} ema={self._energy_ema:7.1f} "
-                f"delta={delta:6.1f} peaks=N{comp['N']:.1f} E{comp['E']:.1f} W{comp['W']:.1f} S{comp['S']:.1f}")
+        if getattr(self, "debug_print", False) and energy >= getattr(self, "ghost_floor", 0.0):
+            print(
+                f"[{label}] energy={energy:7.1f} ema_prev={ema_prev:7.1f} ema={ema_now:7.1f} "
+                f"delta={delta:7.1f} reason={reason} "
+                f"thr_energy={self.min_energy:.1f} thr_jump={self.min_jump:.1f} "
+                f"peaks=N{comp['N']:.1f} E{comp['E']:.1f} W{comp['W']:.1f} S{comp['S']:.1f}"
+            )
 
         # If it’s not a valid hit, stop here
         if label != "HIT":
@@ -147,10 +155,24 @@ class UDPProtocol(asyncio.DatagramProtocol):
 
         # Cooldown (avoid duplicates)
         now = time.time()
-        if now - self._last_accept_ts < self.cooldown_s:
-            if self.debug_print:
-                print(f"[DROP_COOLDOWN] energy={energy:7.1f} dt={now - self._last_accept_ts:0.3f}s")
+        dt = now - self._last_accept_ts
+        if dt < self.cooldown_s:
+            if getattr(self, "debug_print", False) and energy >= getattr(self, "ghost_floor", 0.0):
+                print(f"[DROP_COOLDOWN] energy={energy:7.1f} dt={dt:0.3f}s cooldown={self.cooldown_s:.3f}s")
             return
+
+        # Mode check (only accept in shooting mode)
+        mode = self.mode_getter() if self.mode_getter else None
+        if mode is None:
+            if getattr(self, "debug_print", False):
+                print("[DROP_MODE] mode=None")
+            return
+        if str(mode).strip() != "shooting":
+            if getattr(self, "debug_print", False) and energy >= getattr(self, "ghost_floor", 0.0):
+                print(f"[DROP_MODE] mode={mode!r}")
+            return
+
+        # Accept hit (stamp last accept *after* passing all gates)
         self._last_accept_ts = now
 
         # Compute features + calibrated mapping
@@ -159,10 +181,9 @@ class UDPProtocol(asyncio.DatagramProtocol):
         x, y = xy_from_features(sx, sy, fit)
         r = math.hypot(x, y)
 
-        print("[HIT] energy=", round(energy, 1), "ema=", round(self._energy_ema, 1), "delta=", round(delta, 1),
-            "sxsy=", round(sx, 3), round(sy, 3))
-
-        self._last_accept_ts = now
+        # Optional: print sx/sy only for accepted hits
+        if getattr(self, "debug_print", False):
+            print(f"[ACCEPT] sx={sx:+.3f} sy={sy:+.3f} x={x:+.4f} y={y:+.4f} r={r:.4f}")
 
         event = {
             "src_ip": addr[0],
