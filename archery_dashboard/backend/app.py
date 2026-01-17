@@ -366,11 +366,11 @@ def cal_apply():
     global calibration_fit
 
     fit = calibration.get("fit")
-    if not fit or fit.get("model") != "affine_sxsy":
+    if not fit or fit.get("model") not in ("affine_sxsy", "poly2_sxsy"):
         return {"ok": False, "error": "no computed fit to apply"}
 
     # Save only what we need for runtime mapping
-    calibration_fit = {"model": "affine_sxsy", "params": fit["params"]}
+    calibration_fit = {"model": fit["model"], "params": fit["params"]}
     _save_fit_to_disk(calibration_fit)
 
     # Exit calibration mode cleanly
