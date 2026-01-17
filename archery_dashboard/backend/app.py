@@ -348,7 +348,7 @@ def cal_compute():
     calibration_fit = {"model": "poly2_sxsy", "params": params}
 
     calibration["fit"] = {
-        "model": "affine_sxsy",
+        "model": "poly2_sxsy",
         "params": params,
         "mean_error_cm": mean_cm,
         "max_error_cm": max_cm,
