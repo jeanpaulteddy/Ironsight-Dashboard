@@ -1,5 +1,6 @@
 # backend/app.py
 import asyncio, time
+import os,json
 from typing import Set
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect # type: ignore
 from fastapi.middleware.cors import CORSMiddleware # type: ignore
@@ -23,7 +24,8 @@ calibration = {
     "paused": False,
 }
 
-calibration_fit = None
+CAL_FIT_PATH = os.path.join(os.path.dirname(__file__), "calibration_fit.json")
+calibration_fit = None  # active fit used by UDP->XY mapping
 
 app.add_middleware(
     CORSMiddleware,
@@ -72,6 +74,13 @@ CH2COMP = {"0": "N", "1": "E", "2": "W", "3": "S"}
 @app.on_event("startup")
 async def startup():
     # start UDP loop and broadcast loop
+    global calibration_fit
+    try:
+        with open(CAL_FIT_PATH, "r") as f:
+            calibration_fit = json.load(f)
+            print("[CAL] loaded fit from disk:", calibration_fit)
+    except Exception:
+        calibration_fit = None
     asyncio.create_task(udp_loop(config.UDP_HOST, config.UDP_PORT, queue, CH2COMP, get_mode))
     asyncio.create_task(dispatch_loop())
 
@@ -161,6 +170,12 @@ async def dispatch_loop():
                 dead.append(ws)
         for ws in dead:
             clients.discard(ws)
+
+def _save_fit_to_disk(fit: dict):
+    tmp = CAL_FIT_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(fit, f)
+    os.replace(tmp, CAL_FIT_PATH)
 
 @app.get("/api/state")
 def get_state():
@@ -344,3 +359,27 @@ def cal_compute():
 def cal_fit():
     return {"ok": True, "fit": calibration_fit}
 
+@app.post("/api/calibration/apply")
+def cal_apply():
+    global calibration_fit
+
+    fit = calibration.get("fit")
+    if not fit or fit.get("model") != "affine_sxsy":
+        return {"ok": False, "error": "no computed fit to apply"}
+
+    # Save only what we need for runtime mapping
+    calibration_fit = {"model": "affine_sxsy", "params": fit["params"]}
+    _save_fit_to_disk(calibration_fit)
+
+    # Exit calibration mode cleanly
+    calibration["active"] = False
+    calibration["paused"] = False
+    calibration["pending"] = None
+
+    # Put system back into normal shooting mode
+    try:
+        set_mode("shooting")
+    except Exception:
+        pass
+
+    return {"ok": True, "applied": True, "fit": calibration_fit, "mode": get_mode()}
