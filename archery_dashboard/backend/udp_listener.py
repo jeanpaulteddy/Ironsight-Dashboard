@@ -1,5 +1,5 @@
 # backend/udp_listener.py
-import asyncio, json, math
+import asyncio, json, math, time
 from typing import Dict, Any, Callable
 import os
 try:
@@ -8,6 +8,30 @@ except Exception:
     default_get_mode = None
 
 from urllib.request import urlopen, Request
+
+_FIT_CACHE = {"fit": None, "ts": 0.0}
+
+def get_fit_cached(ttl: float = 0.5):
+    """Fetch /api/calibration/fit at most once per ttl seconds."""
+    now = time.time()
+    if now - _FIT_CACHE["ts"] < ttl:
+        return _FIT_CACHE["fit"]
+
+    try:
+        req = Request("http://127.0.0.1:8000/api/calibration/fit", headers={"Accept": "application/json"})
+        with urlopen(req, timeout=0.2) as r:
+            data = json.loads(r.read().decode("utf-8"))
+            fit = data.get("fit")
+            if isinstance(fit, dict) and fit.get("model") == "affine_sxsy" and isinstance(fit.get("params"), dict):
+                _FIT_CACHE["fit"] = fit
+            else:
+                _FIT_CACHE["fit"] = None
+    except Exception:
+        # keep last known fit if backend is restarting
+        pass
+
+    _FIT_CACHE["ts"] = now
+    return _FIT_CACHE["fit"]
 
 # Keep consistent with your current geometry idea
 D_M = 1.0
@@ -30,7 +54,20 @@ def features_from_peaks(pN: float, pE: float, pW: float, pS: float):
     sy = (pN - pS) / (pN + pS + eps)
     return sx, sy
 
-def xy_from_features(sx: float, sy: float):
+def xy_from_features(sx: float, sy: float, fit):
+    """Map normalized features -> meters. If calibration fit exists, use it."""
+    if isinstance(fit, dict) and fit.get("model") == "affine_sxsy":
+        p = fit.get("params", {})
+        try:
+            a = float(p["a"]); b = float(p["b"]); c = float(p["c"])
+            d = float(p["d"]); e = float(p["e"]); f = float(p["f"])
+            x = a * sx + b * sy + c
+            y = d * sx + e * sy + f
+            return x, y
+        except Exception:
+            pass
+
+    # Fallback: original uncalibrated mapping
     x = HALF_SPAN * sx
     y = HALF_SPAN * sy
     return x, y
@@ -54,29 +91,16 @@ class UDPProtocol(asyncio.DatagramProtocol):
         comp = extract_compass_peaks(msg, self.ch2comp)
 
         sx, sy = features_from_peaks(comp["N"], comp["E"], comp["W"], comp["S"])
-        x, y = xy_from_features(sx, sy)
-        # apply affine calibration if backend has one
-        try:
-            req = Request("http://127.0.0.1:8000/api/calibration/fit", headers={"Accept": "application/json"})
-            with urlopen(req, timeout=0.2) as r:
-                data = json.loads(r.read().decode("utf-8"))
-                fit = data.get("fit")
-                if fit and fit.get("model") == "affine_sxsy":
-                    p = fit["params"]
-                    x = p["a"]*sx + p["b"]*sy + p["c"]
-                    y = p["d"]*sx + p["e"]*sy + p["f"]
-        except Exception:
-            pass
+        fit = get_fit_cached()
+        x, y = xy_from_features(sx, sy, fit)
 
         r = math.hypot(x, y)
         
         mode = self.mode_getter() if self.mode_getter else None
         if mode is None:
             return
-        # print("[UDP] pid=", os.getpid(), "mode_seen=", mode, "mode_state_id=", id(mode_state))
-        print("----------------------THIS IS THE MODE : \n", mode)
-        print("condition", mode != "shooting \n")
-        if mode != "shooting":
+        # accept only while in shooting mode
+        if str(mode).strip() != "shooting":
             return
 
         event = {
@@ -95,7 +119,6 @@ class UDPProtocol(asyncio.DatagramProtocol):
             pass
 
 async def udp_loop(host: str, port: int, queue: asyncio.Queue, ch2comp: Dict[str, str], mode_getter):
-    print(f"[LALALALALA] mode is : {mode_getter()}")
     loop = asyncio.get_running_loop()
     transport, _ = await loop.create_datagram_endpoint(
         lambda: UDPProtocol(queue, ch2comp, mode_getter=mode_getter),
