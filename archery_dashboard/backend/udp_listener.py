@@ -95,6 +95,9 @@ class UDPProtocol(asyncio.DatagramProtocol):
         self.ch2comp = ch2comp
         # If a mode getter isn't provided, fall back to mode_state.get_mode (if available)
         self.mode_getter = mode_getter or default_get_mode
+        self._last_accept_ts = 0.0
+        self.cooldown_s = 0.6      # tweak later if needed
+        self.min_energy = 2.5      # sum of peaks threshold (tune later)
 
     def datagram_received(self, data: bytes, addr):
         try:
@@ -106,6 +109,14 @@ class UDPProtocol(asyncio.DatagramProtocol):
             return
 
         comp = extract_compass_peaks(msg, self.ch2comp)
+
+        energy = comp["N"] + comp["E"] + comp["W"] + comp["S"]
+        if energy < self.min_energy:
+            return
+
+        now = time.time()
+        if now - self._last_accept_ts < self.cooldown_s:
+            return
 
         sx, sy = features_from_peaks(comp["N"], comp["E"], comp["W"], comp["S"])
         fit = get_fit_cached()
@@ -119,6 +130,8 @@ class UDPProtocol(asyncio.DatagramProtocol):
         # accept only while in shooting mode
         if str(mode).strip() != "shooting":
             return
+        
+        self._last_accept_ts = now
 
         event = {
             "src_ip": addr[0],
