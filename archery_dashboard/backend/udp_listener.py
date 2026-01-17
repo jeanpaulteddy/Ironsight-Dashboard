@@ -112,6 +112,8 @@ class UDPProtocol(asyncio.DatagramProtocol):
 
         energy = comp["N"] + comp["E"] + comp["W"] + comp["S"]
         if energy < self.min_energy:
+            # TEMP: see ghost energy levels
+            print("[GHOST?] energy=", round(energy, 3), "peaks=", comp)
             return
 
         now = time.time()
@@ -130,6 +132,8 @@ class UDPProtocol(asyncio.DatagramProtocol):
         # accept only while in shooting mode
         if str(mode).strip() != "shooting":
             return
+        
+        print("[HIT] energy=", round(energy, 3), "sxsy=", round(sx,3), round(sy,3))
         
         self._last_accept_ts = now
 
