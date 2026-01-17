@@ -116,14 +116,27 @@ async function resumeSet() {
 async function computeCal() {
   fitErr.value = null
   fit.value = null
+
   try {
-    const r = await fetch(`${API}/api/calibration/compute`, { method: "POST" })
-    const j = await r.json()
-    if (!j.ok) {
-      fitErr.value = j.error || "compute failed"
+    // 1) compute
+    const r1 = await fetch(`${API}/api/calibration/compute`, { method: "POST" })
+    const j1 = await r1.json()
+    if (!j1.ok) {
+      fitErr.value = j1.error || "compute failed"
       return
     }
-    fit.value = j
+    fit.value = j1
+
+    // 2) apply (save + stop calibration + set mode shooting)
+    const r2 = await fetch(`${API}/api/calibration/apply`, { method: "POST" })
+    const j2 = await r2.json()
+    if (!j2.ok) {
+      fitErr.value = j2.error || "apply failed"
+      return
+    }
+
+    // 3) send user back to normal dashboard
+    window.location.href = "/"
   } catch (e) {
     fitErr.value = String(e)
   }

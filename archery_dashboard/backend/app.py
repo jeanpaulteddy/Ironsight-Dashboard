@@ -314,7 +314,8 @@ def cal_compute():
         y_gt = s.get("y_gt")
         if sx is None or sy is None or x_gt is None or y_gt is None:
             continue
-        A.append([float(sx), float(sy), 1.0])
+        sx = float(sx); sy = float(sy)
+        A.append([sx, sy, sx*sy, sx*sx, sy*sy, 1.0])
         bx.append(float(x_gt))
         by.append(float(y_gt))
 
@@ -338,12 +339,13 @@ def cal_compute():
     max_cm = float(err.max() * 100.0)
 
     params = {
-        "a": float(px[0]), "b": float(px[1]), "c": float(px[2]),
-        "d": float(py[0]), "e": float(py[1]), "f": float(py[2]),
+    "order": ["sx", "sy", "sx_sy", "sx2", "sy2", "1"],
+    "x": [float(v) for v in px.tolist()],
+    "y": [float(v) for v in py.tolist()],
     }
 
     global calibration_fit
-    calibration_fit = {"model":"affine_sxsy","params": params}
+    calibration_fit = {"model": "poly2_sxsy", "params": params}
 
     calibration["fit"] = {
         "model": "affine_sxsy",
