@@ -96,8 +96,11 @@ class UDPProtocol(asyncio.DatagramProtocol):
         # If a mode getter isn't provided, fall back to mode_state.get_mode (if available)
         self.mode_getter = mode_getter or default_get_mode
         self._last_accept_ts = 0.0
-        self.cooldown_s = 0.6      # tweak later if needed
-        self.min_energy = 2.5      # sum of peaks threshold (tune later)
+        self.cooldown_s = 0.7      # tweak later if needed
+        self.min_energy = 1100      # sum of peaks threshold (tune later)
+        self._energy_ema = 0.0
+        self._ema_alpha = 0.05
+        self.min_jump = 60.0   # tune: 40–120
 
     def datagram_received(self, data: bytes, addr):
         try:
@@ -111,30 +114,55 @@ class UDPProtocol(asyncio.DatagramProtocol):
         comp = extract_compass_peaks(msg, self.ch2comp)
 
         energy = comp["N"] + comp["E"] + comp["W"] + comp["S"]
+
+        # --- Jump gating must compare against *previous* baseline ---
+        prev_ema = self._energy_ema
+        if prev_ema == 0.0:
+            # first ever sample, initialize baseline
+            prev_ema = energy
+            self._energy_ema = energy
+
+        delta = energy - prev_ema
+
+        # Hard gate
         if energy < self.min_energy:
-            # TEMP: see ghost energy levels
-            print("[GHOST?] energy=", round(energy, 3), "peaks=", comp)
+            # TEMP debug (optional)
+            # print("[DROP energy] energy=", round(energy, 1), "ema=", round(prev_ema, 1), "peaks=", comp)
+            # Update baseline slowly even for drops
+            self._energy_ema = (1 - self._ema_alpha) * self._energy_ema + self._ema_alpha * energy
             return
 
+        # Jump gate (blocks steady ghost bursts near threshold)
+        if delta < self.min_jump:
+            # TEMP debug (optional)
+            # print("[DROP jump] energy=", round(energy, 1), "ema=", round(prev_ema, 1), "delta=", round(delta, 1))
+            self._energy_ema = (1 - self._ema_alpha) * self._energy_ema + self._ema_alpha * energy
+            return
+
+        # Update baseline after passing gates (or keep it always-updating; either is fine)
+        self._energy_ema = (1 - self._ema_alpha) * self._energy_ema + self._ema_alpha * energy
+
+        # Cooldown (avoid multiple bundles for one arrow)
         now = time.time()
         if now - self._last_accept_ts < self.cooldown_s:
             return
 
-        sx, sy = features_from_peaks(comp["N"], comp["E"], comp["W"], comp["S"])
-        fit = get_fit_cached()
-        x, y = xy_from_features(sx, sy, fit)
-
-        r = math.hypot(x, y)
-        
+        # Mode check (only accept in shooting mode)
         mode = self.mode_getter() if self.mode_getter else None
         if mode is None:
             return
-        # accept only while in shooting mode
         if str(mode).strip() != "shooting":
             return
-        
-        print("[HIT] energy=", round(energy, 3), "sxsy=", round(sx,3), round(sy,3))
-        
+
+        # Compute features + calibrated mapping
+        sx, sy = features_from_peaks(comp["N"], comp["E"], comp["W"], comp["S"])
+        fit = get_fit_cached()
+        x, y = xy_from_features(sx, sy, fit)
+        r = math.hypot(x, y)
+
+        print("[HIT] energy=", round(energy, 1), "ema=", round(self._energy_ema, 1), "delta=", round(delta, 1),
+            "sxsy=", round(sx, 3), round(sy, 3))
+
         self._last_accept_ts = now
 
         event = {
