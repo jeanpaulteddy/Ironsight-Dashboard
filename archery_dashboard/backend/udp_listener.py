@@ -97,7 +97,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
         self.mode_getter = mode_getter or default_get_mode
         self._last_accept_ts = 0.0
         self.cooldown_s = 0.7      # tweak later if needed
-        self.min_energy = 1100      # sum of peaks threshold (tune later)
+        self.min_energy = 1080      # sum of peaks threshold (tune later)
         self._energy_ema = 0.0
         self._ema_alpha = 0.05
         self.min_jump = 60.0   # tune: 40–120
