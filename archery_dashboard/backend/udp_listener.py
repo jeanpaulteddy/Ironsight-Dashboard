@@ -101,7 +101,9 @@ class UDPProtocol(asyncio.DatagramProtocol):
         self._energy_ema = 0.0
         self._ema_alpha = 0.05
         self.min_jump = 60.0   # tune: 40–120
-
+        self.debug_print = True
+        self.ghost_floor = 900.0   # don’t spam tiny noise; adjust if needed
+        
     def datagram_received(self, data: bytes, addr):
         try:
             msg = json.loads(data.decode("utf-8", errors="ignore"))
@@ -115,44 +117,41 @@ class UDPProtocol(asyncio.DatagramProtocol):
 
         energy = comp["N"] + comp["E"] + comp["W"] + comp["S"]
 
-        # --- Jump gating must compare against *previous* baseline ---
         prev_ema = self._energy_ema
         if prev_ema == 0.0:
-            # first ever sample, initialize baseline
             prev_ema = energy
             self._energy_ema = energy
 
         delta = energy - prev_ema
 
-        # Hard gate
-        if energy < self.min_energy:
-            # TEMP debug (optional)
-            # print("[DROP energy] energy=", round(energy, 1), "ema=", round(prev_ema, 1), "peaks=", comp)
-            # Update baseline slowly even for drops
-            self._energy_ema = (1 - self._ema_alpha) * self._energy_ema + self._ema_alpha * energy
-            return
-
-        # Jump gate (blocks steady ghost bursts near threshold)
-        if delta < self.min_jump:
-            # TEMP debug (optional)
-            # print("[DROP jump] energy=", round(energy, 1), "ema=", round(prev_ema, 1), "delta=", round(delta, 1))
-            self._energy_ema = (1 - self._ema_alpha) * self._energy_ema + self._ema_alpha * energy
-            return
-
-        # Update baseline after passing gates (or keep it always-updating; either is fine)
+        # Always update baseline (EMA)
         self._energy_ema = (1 - self._ema_alpha) * self._energy_ema + self._ema_alpha * energy
 
-        # Cooldown (avoid multiple bundles for one arrow)
-        now = time.time()
-        if now - self._last_accept_ts < self.cooldown_s:
+        # Decide label
+        label = None
+        if energy < self.min_energy:
+            label = "GHOST_ENERGY"
+        elif delta < self.min_jump:
+            label = "GHOST_JUMP"
+        else:
+            label = "HIT"
+
+        # Print everything above a floor to avoid spam
+        if self.debug_print and energy >= self.ghost_floor:
+            print(f"[{label}] energy={energy:7.1f} ema={self._energy_ema:7.1f} "
+                f"delta={delta:6.1f} peaks=N{comp['N']:.1f} E{comp['E']:.1f} W{comp['W']:.1f} S{comp['S']:.1f}")
+
+        # If it’s not a valid hit, stop here
+        if label != "HIT":
             return
 
-        # Mode check (only accept in shooting mode)
-        mode = self.mode_getter() if self.mode_getter else None
-        if mode is None:
+        # Cooldown (avoid duplicates)
+        now = time.time()
+        if now - self._last_accept_ts < self.cooldown_s:
+            if self.debug_print:
+                print(f"[DROP_COOLDOWN] energy={energy:7.1f} dt={now - self._last_accept_ts:0.3f}s")
             return
-        if str(mode).strip() != "shooting":
-            return
+        self._last_accept_ts = now
 
         # Compute features + calibrated mapping
         sx, sy = features_from_peaks(comp["N"], comp["E"], comp["W"], comp["S"])
