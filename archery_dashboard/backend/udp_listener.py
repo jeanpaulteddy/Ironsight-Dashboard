@@ -13,7 +13,8 @@ HALF_SPAN = D_M / 2.0
 
 def extract_compass_peaks(msg: Dict[str, Any], ch2comp: Dict[str, str]) -> Dict[str, float]:
     ch = msg.get("ch", {})
-    peaks_by_ch = {k: float(v.get("energy", v.get("peak", 0.0))) for k, v in ch.items()}
+    # Prefer squared energy when available (energy2), then linear energy, then raw peak.
+    peaks_by_ch = {k: float(v.get("energy2", v.get("energy", v.get("peak", 0.0)))) for k, v in ch.items()}
 
     out = {"N": 0.0, "E": 0.0, "W": 0.0, "S": 0.0}
     for ch_str, pk in peaks_by_ch.items():
@@ -114,7 +115,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
 
         raw_ch = msg.get("ch", {})
         # Stable channel order for readability
-        ch_energy = {str(i): float(raw_ch.get(str(i), {}).get("energy", raw_ch.get(str(i), {}).get("peak", 0.0))) for i in range(4)}
+        ch_energy = {str(i): float(raw_ch.get(str(i), {}).get("energy2", raw_ch.get(str(i), {}).get("energy", raw_ch.get(str(i), {}).get("peak", 0.0)))) for i in range(4)}
         ch_peak = {str(i): float(raw_ch.get(str(i), {}).get("peak", 0.0)) for i in range(4)}
         max_peak = max(ch_peak.values()) if ch_peak else 0.0
 
@@ -130,7 +131,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
             if t_ms is not None: meta.append(f"t_ms={t_ms}")
             meta.append(f"src={addr[0]}:{addr[1]}")
             print(hdr, " ".join(meta))
-            print(f"  ch_energy: 0={ch_energy['0']:.1f}  1={ch_energy['1']:.1f}  2={ch_energy['2']:.1f}  3={ch_energy['3']:.1f}")
+            print(f"  ch_energy2: 0={ch_energy['0']:.1f}  1={ch_energy['1']:.1f}  2={ch_energy['2']:.1f}  3={ch_energy['3']:.1f}")
             print(f"  ch_peak:   0={ch_peak['0']:.1f}  1={ch_peak['1']:.1f}  2={ch_peak['2']:.1f}  3={ch_peak['3']:.1f}   (max={max_peak:.1f})")
             print(f"  max_energy={max_energy:.1f}  dom_ratio={dom_ratio:.2f}")
 
@@ -175,7 +176,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
             print(
                 f"[{label}] sumE={energy:6.1f}  maxE={max_energy:5.1f}  dom={dom_ratio:4.2f}  maxPeak={max_peak:6.1f}  Δ={delta:6.1f}  ema={ema_now:6.1f}  (prev={ema_prev:6.1f})\n"
                 f"       reason={reason}  thr(sumE)={self.min_energy:.1f}  thr(maxE)={self.min_max_energy:.1f}  thr(dom)={self.min_dom_ratio:.2f}  thr(peak)={self.min_peak_abs:.1f}  thr(Δ)=disabled\n"
-                f"       compass_energy: N={comp['N']:.1f}  E={comp['E']:.1f}  W={comp['W']:.1f}  S={comp['S']:.1f}"
+                f"       compass_energy2: N={comp['N']:.1f}  E={comp['E']:.1f}  W={comp['W']:.1f}  S={comp['S']:.1f}"
             )
 
         # If it’s not a valid hit, stop here
