@@ -78,7 +78,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
         self.min_energy = 20.0     # sum(E) threshold for HIT vs GHOST (retuned for arrow energy scale)
         self._energy_ema = 0.0
         self._ema_alpha = 0.05
-        self.min_jump = 8.0        # energy must jump above EMA by this amount
+        self.min_jump = 8.0        # (currently not used; delta gating disabled for calibration)
 
         self.debug_print = True
         self.pretty_print = True
@@ -139,15 +139,13 @@ class UDPProtocol(asyncio.DatagramProtocol):
         if energy < self.min_energy:
             label = "GHOST"
             reason = f"energy<{self.min_energy:.1f}"
-        elif (not ema_was_uninit) and (delta < self.min_jump):
-            label = "GHOST"
-            reason = f"delta<{self.min_jump:.1f}"
+        # NOTE: delta gating disabled (handled primarily on the PICO)
 
         # Print everything above a floor to avoid spam
         if getattr(self, "debug_print", False) and energy >= getattr(self, "ghost_floor", 0.0):
             print(
                 f"[{label}] sumE={energy:6.1f}  Δ={delta:6.1f}  ema={ema_now:6.1f}  (prev={ema_prev:6.1f})\n"
-                f"       reason={reason}  thr(sumE)={self.min_energy:.1f}  thr(Δ)={self.min_jump:.1f}\n"
+                f"       reason={reason}  thr(sumE)={self.min_energy:.1f}  thr(Δ)=disabled\n"
                 f"       compass_energy: N={comp['N']:.1f}  E={comp['E']:.1f}  W={comp['W']:.1f}  S={comp['S']:.1f}"
             )
 
