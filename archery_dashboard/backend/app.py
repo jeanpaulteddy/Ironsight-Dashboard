@@ -42,6 +42,10 @@ clients: Set[WebSocket] = set()
 state = SessionState()
 queue: asyncio.Queue = asyncio.Queue(maxsize=200)
 
+def get_fit():
+    # return the currently active calibration fit (or None)
+    return calibration_fit
+
 def get_mode() -> str:
     with _mode_lock:
         return _mode
@@ -81,7 +85,7 @@ async def startup():
             print("[CAL] loaded fit from disk:", calibration_fit)
     except Exception:
         calibration_fit = None
-    asyncio.create_task(udp_loop(config.UDP_HOST, config.UDP_PORT, queue, CH2COMP, get_mode))
+    asyncio.create_task(udp_loop(config.UDP_HOST, config.UDP_PORT, queue, CH2COMP, get_mode, fit_getter=get_fit))
     asyncio.create_task(dispatch_loop())
 
 @app.on_event("startup")

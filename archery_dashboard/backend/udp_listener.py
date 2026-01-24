@@ -1,39 +1,11 @@
 # backend/udp_listener.py
 import asyncio, json, math, time
-from typing import Dict, Any, Callable
+from typing import Dict, Any, Callable, Optional
 import os
 try:
     from mode_state import get_mode as default_get_mode
 except Exception:
     default_get_mode = None
-
-from urllib.request import urlopen, Request
-
-_FIT_CACHE = {"fit": None, "ts": 0.0}
-
-def get_fit_cached(ttl: float = 0.5):
-    now = time.time()
-    if now - _FIT_CACHE["ts"] < ttl:
-        return _FIT_CACHE["fit"]
-
-    try:
-        req = Request("http://127.0.0.1:8000/api/calibration/fit", headers={"Accept": "application/json"})
-        with urlopen(req, timeout=0.2) as r:
-            data = json.loads(r.read().decode("utf-8"))
-            fit = data.get("fit")
-
-            if isinstance(fit, dict) and isinstance(fit.get("params"), dict):
-                if fit.get("model") in ("affine_sxsy", "poly2_sxsy"):
-                    _FIT_CACHE["fit"] = fit
-                else:
-                    _FIT_CACHE["fit"] = None
-            else:
-                _FIT_CACHE["fit"] = None
-    except Exception:
-        pass
-
-    _FIT_CACHE["ts"] = now
-    return _FIT_CACHE["fit"]
 
 # Keep consistent with your current geometry idea
 D_M = 1.0
@@ -92,11 +64,12 @@ def xy_from_features(sx: float, sy: float, fit):
     return x, y
 
 class UDPProtocol(asyncio.DatagramProtocol):
-    def __init__(self, queue: asyncio.Queue, ch2comp: Dict[str, str], mode_getter: Callable[[], str] | None = None):
+    def __init__(self, queue: asyncio.Queue, ch2comp: Dict[str, str], mode_getter: Optional[Callable[[], str]] = None, fit_getter: Optional[Callable[[], Any]] = None):
         self.queue = queue
         self.ch2comp = ch2comp
         # If a mode getter isn't provided, fall back to mode_state.get_mode (if available)
         self.mode_getter = mode_getter or default_get_mode
+        self.fit_getter = fit_getter
         self._last_accept_ts = 0.0
         self.cooldown_s = 0.7      # tweak later if needed
         self.min_energy = 1080      # sum of peaks threshold (tune later)
@@ -179,7 +152,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
 
         # Compute features + calibrated mapping
         sx, sy = features_from_peaks(comp["N"], comp["E"], comp["W"], comp["S"])
-        fit = get_fit_cached()
+        fit = self.fit_getter() if self.fit_getter else None
         print("[FIT_USED]", None if not fit else fit.get("model"))
         x, y = xy_from_features(sx, sy, fit)
         r = math.hypot(x, y)
@@ -203,10 +176,10 @@ class UDPProtocol(asyncio.DatagramProtocol):
         except asyncio.QueueFull:
             pass
 
-async def udp_loop(host: str, port: int, queue: asyncio.Queue, ch2comp: Dict[str, str], mode_getter):
+async def udp_loop(host: str, port: int, queue: asyncio.Queue, ch2comp: Dict[str, str], mode_getter, fit_getter=None):
     loop = asyncio.get_running_loop()
     transport, _ = await loop.create_datagram_endpoint(
-        lambda: UDPProtocol(queue, ch2comp, mode_getter=mode_getter),
+        lambda: UDPProtocol(queue, ch2comp, mode_getter=mode_getter, fit_getter=fit_getter),
         local_addr=(host, port),
     )
     try:
