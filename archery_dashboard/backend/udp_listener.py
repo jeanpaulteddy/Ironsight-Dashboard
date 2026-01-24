@@ -1,5 +1,6 @@
 # backend/udp_listener.py
 import asyncio, json, math, time
+from math import log
 from typing import Dict, Any, Callable, Optional
 import os
 try:
@@ -99,6 +100,29 @@ class UDPProtocol(asyncio.DatagramProtocol):
         self.peak_C = 320.0
         self.dom_C = 0.42
 
+        # --- Score-based arrow classifier (multi-feature) ---
+        # This uses multiple cues instead of a single threshold, and allows calibration
+        # to be stricter than shooting.
+        self.use_score_classifier = True
+
+        # Score thresholds (tune): calibration should be stricter.
+        self.score_thresh_shooting = 7
+        self.score_thresh_calibration = 9
+
+        # Feature thresholds for scoring
+        self.score_sumE2_1 = 300.0
+        self.score_sumE2_2 = 600.0
+        self.score_peak_1 = 320.0
+        self.score_peak_2 = 360.0
+        self.score_dom_1 = 0.45
+        self.score_dom_2 = 0.60
+        self.score_peak_over = 25.0
+        self.score_entropy_max = 1.00
+        self.score_top2_ratio = 0.75
+
+        # If True, we will still allow legacy A/B/C as a fallback when score classifier is off.
+        self.use_legacy_abc = True
+
         # Legacy peak gate is too brittle (you have real arrows around ~281-288 and ghosts can exceed that).
         self.use_peak_gate = False
         self.min_peak_abs = 0.0
@@ -137,6 +161,30 @@ class UDPProtocol(asyncio.DatagramProtocol):
         sum_energy = sum(ch_energy.values()) if ch_energy else 0.0
         dom_ratio = (max_energy / sum_energy) if sum_energy > 1e-9 else 0.0
 
+        # Extra features for robust arrow-vs-ghost classification
+        # peakOver: impulse contrast relative to the other sensors
+        if ch_peak:
+            peaks_sorted = sorted(ch_peak.values())
+            peak_median = peaks_sorted[len(peaks_sorted)//2]
+            peak_over = max_peak - peak_median
+        else:
+            peak_median = 0.0
+            peak_over = 0.0
+
+        # Entropy of the energy distribution across sensors (lower => more concentrated)
+        if sum_energy > 1e-9:
+            ps = [max(v, 0.0) / sum_energy for v in ch_energy.values()]
+            entropy = -sum(p * log(p + 1e-12) for p in ps)
+        else:
+            entropy = 0.0
+
+        # Ratio of top-2 energies to total (higher => concentrated into 1-2 sensors)
+        if ch_energy:
+            es = sorted([float(v) for v in ch_energy.values()], reverse=True)
+            top2_ratio = (es[0] + es[1]) / sum_energy if (len(es) >= 2 and sum_energy > 1e-9) else 0.0
+        else:
+            top2_ratio = 0.0
+
         if getattr(self, "debug_print", False):
             hdr = "[BUNDLE]"
             meta = []
@@ -147,7 +195,8 @@ class UDPProtocol(asyncio.DatagramProtocol):
             print(hdr, " ".join(meta))
             print(f"  ch_energy2: 0={ch_energy['0']:.1f}  1={ch_energy['1']:.1f}  2={ch_energy['2']:.1f}  3={ch_energy['3']:.1f}")
             print(f"  ch_peak:   0={ch_peak['0']:.1f}  1={ch_peak['1']:.1f}  2={ch_peak['2']:.1f}  3={ch_peak['3']:.1f}   (max={max_peak:.1f})")
-            print(f"  max_energy={max_energy:.1f}  dom_ratio={dom_ratio:.2f}")
+            print(f"  max_energy={max_energy:.1f}  dom_ratio={dom_ratio:.2f}  top2_ratio={top2_ratio:.2f}")
+            print(f"  peak_over={peak_over:.1f}  entropy={entropy:.2f}  peak_med={peak_median:.1f}")
 
         comp = extract_compass_peaks(msg, self.ch2comp)
 
@@ -172,6 +221,11 @@ class UDPProtocol(asyncio.DatagramProtocol):
         label = "HIT"
         reason = "pass"
 
+        # Determine mode early so calibration can be stricter
+        mode = self.mode_getter() if self.mode_getter else None
+        mode_s = str(mode).strip().lower() if mode is not None else ""
+        is_cal = mode_s in {"calibration", "calibrating"}
+
         # Hard rejects first
         if energy < self.min_energy:
             label = "GHOST"
@@ -183,27 +237,65 @@ class UDPProtocol(asyncio.DatagramProtocol):
             label = "GHOST"
             reason = f"dom<{self.min_dom_ratio:.2f}"
         else:
-            # Arrow classifier (stricter than the old peak gate)
-            A = (energy >= self.sumE2_A) and (dom_ratio >= self.dom_A)
-            B = (max_peak >= self.peak_B)
-            C = (energy >= self.sumE2_C) and (max_peak >= self.peak_C) and (dom_ratio >= self.dom_C)
+            # Multi-feature score classifier
+            score = 0
+            why = []
 
-            if A:
-                label, reason = "HIT", f"A(sumE2>={self.sumE2_A:.0f},dom>={self.dom_A:.2f})"
-            elif B:
-                label, reason = "HIT", f"B(peak>={self.peak_B:.0f})"
-            elif C:
-                label, reason = "HIT", f"C(sumE2>={self.sumE2_C:.0f},peak>={self.peak_C:.0f},dom>={self.dom_C:.2f})"
+            if energy >= self.score_sumE2_1:
+                score += 2; why.append(f"sumE2>={self.score_sumE2_1:.0f}(+2)")
+            if energy >= self.score_sumE2_2:
+                score += 3; why.append(f"sumE2>={self.score_sumE2_2:.0f}(+3)")
+
+            if max_peak >= self.score_peak_1:
+                score += 2; why.append(f"peak>={self.score_peak_1:.0f}(+2)")
+            if max_peak >= self.score_peak_2:
+                score += 3; why.append(f"peak>={self.score_peak_2:.0f}(+3)")
+
+            if dom_ratio >= self.score_dom_1:
+                score += 2; why.append(f"dom>={self.score_dom_1:.2f}(+2)")
+            if dom_ratio >= self.score_dom_2:
+                score += 3; why.append(f"dom>={self.score_dom_2:.2f}(+3)")
+
+            if peak_over >= self.score_peak_over:
+                score += 2; why.append(f"peakOver>={self.score_peak_over:.0f}(+2)")
+
+            if entropy <= self.score_entropy_max:
+                score += 2; why.append(f"entropy<={self.score_entropy_max:.2f}(+2)")
+
+            if top2_ratio >= self.score_top2_ratio:
+                score += 2; why.append(f"top2>={self.score_top2_ratio:.2f}(+2)")
+
+            thresh = self.score_thresh_calibration if is_cal else self.score_thresh_shooting
+
+            if getattr(self, "use_score_classifier", True):
+                if score >= thresh:
+                    label = "HIT"
+                    reason = f"score={score}/{thresh} " + ",".join(why)
+                else:
+                    label = "GHOST"
+                    reason = f"score={score}/{thresh} " + ",".join(why)
             else:
-                label, reason = "GHOST", "not_arrow"
+                # Legacy A/B/C fallback
+                A = (energy >= self.sumE2_A) and (dom_ratio >= self.dom_A)
+                B = (max_peak >= self.peak_B)
+                C = (energy >= self.sumE2_C) and (max_peak >= self.peak_C) and (dom_ratio >= self.dom_C)
+
+                if A:
+                    label, reason = "HIT", f"A(sumE2>={self.sumE2_A:.0f},dom>={self.dom_A:.2f})"
+                elif B:
+                    label, reason = "HIT", f"B(peak>={self.peak_B:.0f})"
+                elif C:
+                    label, reason = "HIT", f"C(sumE2>={self.sumE2_C:.0f},peak>={self.peak_C:.0f},dom>={self.dom_C:.2f})"
+                else:
+                    label, reason = "GHOST", "not_arrow"
 
         # NOTE: delta gating disabled (handled primarily on the PICO)
 
         # Print everything above a floor to avoid spam
         if getattr(self, "debug_print", False) and energy >= getattr(self, "ghost_floor", 0.0):
             print(
-                f"[{label}] sumE={energy:6.1f}  maxE={max_energy:5.1f}  dom={dom_ratio:4.2f}  maxPeak={max_peak:6.1f}  Δ={delta:6.1f}  ema={ema_now:6.1f}  (prev={ema_prev:6.1f})\n"
-                f"       reason={reason}  thr(sumE2)={self.min_energy:.1f}  thr(maxE)={self.min_max_energy:.1f}  thr(dom_floor)={self.min_dom_ratio:.2f}  A>=({self.sumE2_A:.0f},{self.dom_A:.2f})  B>=({self.peak_B:.0f})  C>=({self.sumE2_C:.0f},{self.peak_C:.0f},{self.dom_C:.2f})  thr(Δ)=disabled\n"
+                f"[{label}] sumE={energy:6.1f}  maxE={max_energy:5.1f}  dom={dom_ratio:4.2f}  top2={top2_ratio:4.2f}  maxPeak={max_peak:6.1f}  pOver={peak_over:5.1f}  H={entropy:4.2f}  Δ={delta:6.1f}  ema={ema_now:6.1f}  (prev={ema_prev:6.1f})\n"
+                f"       reason={reason}  thr(sumE2)={self.min_energy:.1f}  thr(maxE)={self.min_max_energy:.1f}  thr(dom_floor)={self.min_dom_ratio:.2f}  score_thr(shoot)={self.score_thresh_shooting}  score_thr(cal)={self.score_thresh_calibration}  thr(Δ)=disabled\n"
                 f"       compass_energy2: N={comp['N']:.1f}  E={comp['E']:.1f}  W={comp['W']:.1f}  S={comp['S']:.1f}"
             )
 
@@ -220,13 +312,11 @@ class UDPProtocol(asyncio.DatagramProtocol):
             return
 
         # Mode check (accept in shooting + calibration modes)
-        mode = self.mode_getter() if self.mode_getter else None
         if mode is None:
             if getattr(self, "debug_print", False):
                 print("[DROP_MODE] mode=None (mode_getter returned None)")
             return
 
-        mode_s = str(mode).strip().lower()
         allowed = {"shooting", "calibration", "calibrating"}
         if mode_s not in allowed:
             if getattr(self, "debug_print", False) and energy >= getattr(self, "ghost_floor", 0.0):
