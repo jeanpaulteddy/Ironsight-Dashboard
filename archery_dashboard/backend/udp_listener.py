@@ -120,9 +120,11 @@ class UDPProtocol(asyncio.DatagramProtocol):
 
         # EMA baseline (keep previous for delta explanation)
         ema_prev = self._energy_ema
-        if ema_prev == 0.0:
-            ema_prev = energy
+        ema_was_uninit = (ema_prev == 0.0)
+        if ema_was_uninit:
+            # Initialize EMA from the first observed energy
             self._energy_ema = energy
+            ema_prev = energy
 
         delta = energy - ema_prev
 
@@ -137,7 +139,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
         if energy < self.min_energy:
             label = "GHOST"
             reason = f"energy<{self.min_energy:.1f}"
-        elif delta < self.min_jump:
+        elif (not ema_was_uninit) and (delta < self.min_jump):
             label = "GHOST"
             reason = f"delta<{self.min_jump:.1f}"
 
