@@ -87,7 +87,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
 
         if not (isinstance(msg, dict) and msg.get("type") == "hit_bundle"):
             return
-
+        print("/n [RAW_CH]", {k: float(v.get("peak", 0.0)) for k, v in msg.get("ch", {}).items()})
         comp = extract_compass_peaks(msg, self.ch2comp)
 
         energy = comp["N"] + comp["E"] + comp["W"] + comp["S"]
