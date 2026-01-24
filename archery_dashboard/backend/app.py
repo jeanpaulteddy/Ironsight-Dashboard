@@ -69,7 +69,7 @@ async def _pose_broadcaster():
             _pose_clients.discard(ws)
 
 # Channel mapping (same default you used)
-CH2COMP = {"0": "N", "1": "E", "2": "W", "3": "S"}
+CH2COMP = {"0": "N", "1": "W", "2": "S", "3": "E"}
 
 @app.on_event("startup")
 async def startup():
