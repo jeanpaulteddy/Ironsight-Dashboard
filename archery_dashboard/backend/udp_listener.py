@@ -75,11 +75,11 @@ class UDPProtocol(asyncio.DatagramProtocol):
         self.cooldown_s = 0.7      # duplicate-suppression window
 
         # Energy-mode thresholds (because we now use per-channel "energy" instead of "peak")
-        self.min_energy = 20.0     # sum(E) threshold for HIT vs GHOST (retuned for arrow energy scale)
+        self.min_energy = 25.0     # sum(E) threshold for HIT vs GHOST (slightly higher to suppress between-shot triggers)
         # Extra gate to suppress false positives: require at least one channel's raw PEAK to be large enough
         # (Arrow impacts tend to produce higher raw peaks than background vibration.)
         self.use_peak_gate = True
-        self.min_peak_abs = 290.0  # tune: raise if still false positives, lower if missing arrows
+        self.min_peak_abs = 282.0  # tuned: your real arrows are peaking ~281–284; keep just above baseline noise
 
         self._energy_ema = 0.0
         self._ema_alpha = 0.05
