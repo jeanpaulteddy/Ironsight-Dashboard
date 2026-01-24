@@ -180,6 +180,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
         # Compute features + calibrated mapping
         sx, sy = features_from_peaks(comp["N"], comp["E"], comp["W"], comp["S"])
         fit = get_fit_cached()
+        print("[FIT_USED]", None if not fit else fit.get("model"))
         x, y = xy_from_features(sx, sy, fit)
         r = math.hypot(x, y)
 
