@@ -71,13 +71,18 @@ class UDPProtocol(asyncio.DatagramProtocol):
         self.mode_getter = mode_getter or default_get_mode
         self.fit_getter = fit_getter
         self._last_accept_ts = 0.0
-        self.cooldown_s = 0.7      # tweak later if needed
-        self.min_energy = 150.0      # sum of per-channel ENERGY threshold (tune later)
+
+        self.cooldown_s = 0.7      # duplicate-suppression window
+
+        # Energy-mode thresholds (because we now use per-channel "energy" instead of "peak")
+        self.min_energy = 50.0     # sum(E) threshold for HIT vs GHOST
         self._energy_ema = 0.0
         self._ema_alpha = 0.05
-        self.min_jump = 20.0   # energy delta threshold (tune later)
+        self.min_jump = 8.0        # energy must jump above EMA by this amount
+
         self.debug_print = True
-        self.ghost_floor = 50.0   # print smaller events while tuning energy mode
+        self.pretty_print = True
+        self.ghost_floor = 10.0    # print smaller events while tuning
         
     def datagram_received(self, data: bytes, addr):
         try:
@@ -87,7 +92,28 @@ class UDPProtocol(asyncio.DatagramProtocol):
 
         if not (isinstance(msg, dict) and msg.get("type") == "hit_bundle"):
             return
-        print("/n [RAW_CH]", {k: float(v.get("energy", v.get("peak", 0.0))) for k, v in msg.get("ch", {}).items()})
+        # Pretty bundle separation
+        if getattr(self, "debug_print", False) and getattr(self, "pretty_print", False):
+            print("\n" + "=" * 68)
+
+        node = msg.get("node")
+        seq = msg.get("seq")
+        t_ms = msg.get("t_ms")
+
+        raw_ch = msg.get("ch", {})
+        # Stable channel order for readability
+        ch_vals = {str(i): float(raw_ch.get(str(i), {}).get("energy", raw_ch.get(str(i), {}).get("peak", 0.0))) for i in range(4)}
+
+        if getattr(self, "debug_print", False):
+            hdr = "[BUNDLE]"
+            meta = []
+            if node is not None: meta.append(f"node={node}")
+            if seq is not None: meta.append(f"seq={seq}")
+            if t_ms is not None: meta.append(f"t_ms={t_ms}")
+            meta.append(f"src={addr[0]}:{addr[1]}")
+            print(hdr, " ".join(meta))
+            print(f"  ch_energy: 0={ch_vals['0']:.1f}  1={ch_vals['1']:.1f}  2={ch_vals['2']:.1f}  3={ch_vals['3']:.1f}")
+
         comp = extract_compass_peaks(msg, self.ch2comp)
 
         energy = comp["N"] + comp["E"] + comp["W"] + comp["S"]
@@ -118,10 +144,9 @@ class UDPProtocol(asyncio.DatagramProtocol):
         # Print everything above a floor to avoid spam
         if getattr(self, "debug_print", False) and energy >= getattr(self, "ghost_floor", 0.0):
             print(
-                f"[{label}] energy={energy:7.1f} ema_prev={ema_prev:7.1f} ema={ema_now:7.1f} "
-                f"delta={delta:7.1f} reason={reason} "
-                f"thr_energy={self.min_energy:.1f} thr_jump={self.min_jump:.1f} "
-                f"peaks=N{comp['N']:.1f} E{comp['E']:.1f} W{comp['W']:.1f} S{comp['S']:.1f}"
+                f"[{label}] sumE={energy:6.1f}  Δ={delta:6.1f}  ema={ema_now:6.1f}  (prev={ema_prev:6.1f})\n"
+                f"       reason={reason}  thr(sumE)={self.min_energy:.1f}  thr(Δ)={self.min_jump:.1f}\n"
+                f"       compass_energy: N={comp['N']:.1f}  E={comp['E']:.1f}  W={comp['W']:.1f}  S={comp['S']:.1f}"
             )
 
         # If it’s not a valid hit, stop here
@@ -133,14 +158,14 @@ class UDPProtocol(asyncio.DatagramProtocol):
         dt = now - self._last_accept_ts
         if dt < self.cooldown_s:
             if getattr(self, "debug_print", False) and energy >= getattr(self, "ghost_floor", 0.0):
-                print(f"[DROP_COOLDOWN] energy={energy:7.1f} dt={dt:0.3f}s cooldown={self.cooldown_s:.3f}s")
+                print(f"[DROP_COOLDOWN] sumE={energy:6.1f}  dt={dt:0.3f}s  cooldown={self.cooldown_s:.3f}s")
             return
 
         # Mode check (only accept in shooting mode)
         mode = self.mode_getter() if self.mode_getter else None
         if mode is None:
             if getattr(self, "debug_print", False):
-                print("[DROP_MODE] mode=None")
+                print("[DROP_MODE] mode=None (mode_getter returned None)")
             return
         if str(mode).strip() != "shooting":
             if getattr(self, "debug_print", False) and energy >= getattr(self, "ghost_floor", 0.0):
@@ -153,13 +178,14 @@ class UDPProtocol(asyncio.DatagramProtocol):
         # Compute features + calibrated mapping
         sx, sy = features_from_peaks(comp["N"], comp["E"], comp["W"], comp["S"])
         fit = self.fit_getter() if self.fit_getter else None
-        print("[FIT_USED]", None if not fit else fit.get("model"))
+        if getattr(self, "debug_print", False):
+            print(f"[FIT] model={None if not fit else fit.get('model')}")
         x, y = xy_from_features(sx, sy, fit)
         r = math.hypot(x, y)
 
         # Optional: print sx/sy only for accepted hits
         if getattr(self, "debug_print", False):
-            print(f"[ACCEPT] sx={sx:+.3f} sy={sy:+.3f} x={x:+.4f} y={y:+.4f} r={r:.4f}")
+            print(f"[ACCEPT] sx={sx:+.3f}  sy={sy:+.3f}  x={x:+.4f}m  y={y:+.4f}m  r={r:.4f}m")
 
         event = {
             "src_ip": addr[0],
