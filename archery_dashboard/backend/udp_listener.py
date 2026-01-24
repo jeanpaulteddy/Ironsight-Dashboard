@@ -12,7 +12,6 @@ from urllib.request import urlopen, Request
 _FIT_CACHE = {"fit": None, "ts": 0.0}
 
 def get_fit_cached(ttl: float = 0.5):
-    """Fetch /api/calibration/fit at most once per ttl seconds."""
     now = time.time()
     if now - _FIT_CACHE["ts"] < ttl:
         return _FIT_CACHE["fit"]
@@ -22,12 +21,15 @@ def get_fit_cached(ttl: float = 0.5):
         with urlopen(req, timeout=0.2) as r:
             data = json.loads(r.read().decode("utf-8"))
             fit = data.get("fit")
-            if isinstance(fit, dict) and fit.get("model") == "affine_sxsy" and isinstance(fit.get("params"), dict):
-                _FIT_CACHE["fit"] = fit
+
+            if isinstance(fit, dict) and isinstance(fit.get("params"), dict):
+                if fit.get("model") in ("affine_sxsy", "poly2_sxsy"):
+                    _FIT_CACHE["fit"] = fit
+                else:
+                    _FIT_CACHE["fit"] = None
             else:
                 _FIT_CACHE["fit"] = None
     except Exception:
-        # keep last known fit if backend is restarting
         pass
 
     _FIT_CACHE["ts"] = now
