@@ -13,7 +13,7 @@ HALF_SPAN = D_M / 2.0
 
 def extract_compass_peaks(msg: Dict[str, Any], ch2comp: Dict[str, str]) -> Dict[str, float]:
     ch = msg.get("ch", {})
-    peaks_by_ch = {k: float(v.get("peak", 0.0)) for k, v in ch.items()}
+    peaks_by_ch = {k: float(v.get("energy", v.get("peak", 0.0))) for k, v in ch.items()}
 
     out = {"N": 0.0, "E": 0.0, "W": 0.0, "S": 0.0}
     for ch_str, pk in peaks_by_ch.items():
@@ -87,7 +87,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
 
         if not (isinstance(msg, dict) and msg.get("type") == "hit_bundle"):
             return
-        print("/n [RAW_CH]", {k: float(v.get("peak", 0.0)) for k, v in msg.get("ch", {}).items()})
+        print("/n [RAW_CH]", {k: float(v.get("energy", v.get("peak", 0.0))) for k, v in msg.get("ch", {}).items()})
         comp = extract_compass_peaks(msg, self.ch2comp)
 
         energy = comp["N"] + comp["E"] + comp["W"] + comp["S"]
