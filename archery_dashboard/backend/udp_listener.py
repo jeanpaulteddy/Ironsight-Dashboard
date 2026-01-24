@@ -73,21 +73,35 @@ class UDPProtocol(asyncio.DatagramProtocol):
         self.fit_getter = fit_getter
         self._last_accept_ts = 0.0
 
-        self.cooldown_s = 0.7      # duplicate-suppression window
+        # duplicate-suppression window (shorter so real consecutive arrows don't get dropped)
+        self.cooldown_s = 0.35
 
-        # Energy-mode thresholds (because we now use per-channel "energy" instead of "peak")
-        self.min_energy = 25.0     # sum(E) threshold for HIT vs GHOST
+        # We treat the incoming per-channel values as ENERGY2 when available (your Pico sends energy2).
+        # So `sumE` in logs below is effectively sumE2.
+        self.min_energy = 25.0
 
-        # Arrow-like dominance gate (more reliable than absolute peak):
-        # require one channel to carry a significant fraction of total energy.
+        # Basic sanity: we still require some dominance and at least one non-trivial channel.
         self.use_dom_gate = True
-        self.min_max_energy = 12.0   # at least one channel must have >= this energy
-        self.min_dom_ratio = 0.35    # max_energy / sumE must be >= this
+        self.min_max_energy = 12.0
+        self.min_dom_ratio = 0.35  # hard floor; below this is usually diffuse vibration
 
-        # Extra gate to suppress false positives: require at least one channel's raw PEAK to be large enough
-        # (Arrow impacts tend to produce higher raw peaks than background vibration.)
-        self.use_peak_gate = True
-        self.min_peak_abs = 282.0  # tuned: your real arrows are peaking ~281–284
+        # Arrow classifier (tuned from your logs):
+        # Accept if:
+        #   (A) sumE2 >= 320 and dom >= 0.40
+        #   OR
+        #   (B) maxPeak >= 340 (big impulse)
+        #   OR
+        #   (C) sumE2 >= 240 and maxPeak >= 320 and dom >= 0.42
+        self.sumE2_A = 320.0
+        self.dom_A = 0.40
+        self.peak_B = 340.0
+        self.sumE2_C = 240.0
+        self.peak_C = 320.0
+        self.dom_C = 0.42
+
+        # Legacy peak gate is too brittle (you have real arrows around ~281-288 and ghosts can exceed that).
+        self.use_peak_gate = False
+        self.min_peak_abs = 0.0
 
         self._energy_ema = 0.0
         self._ema_alpha = 0.05
@@ -154,9 +168,11 @@ class UDPProtocol(asyncio.DatagramProtocol):
         ema_now = self._energy_ema
 
         # Classify + explain
+        # NOTE: `energy` here is sum of compass_energy2, so it's effectively sumE2.
         label = "HIT"
         reason = "pass"
 
+        # Hard rejects first
         if energy < self.min_energy:
             label = "GHOST"
             reason = f"energy<{self.min_energy:.1f}"
@@ -166,16 +182,28 @@ class UDPProtocol(asyncio.DatagramProtocol):
         elif getattr(self, "use_dom_gate", False) and (dom_ratio < getattr(self, "min_dom_ratio", 0.0)):
             label = "GHOST"
             reason = f"dom<{self.min_dom_ratio:.2f}"
-        elif getattr(self, "use_peak_gate", False) and (max_peak < getattr(self, "min_peak_abs", 0.0)):
-            label = "GHOST"
-            reason = f"peak<{self.min_peak_abs:.1f}"
+        else:
+            # Arrow classifier (stricter than the old peak gate)
+            A = (energy >= self.sumE2_A) and (dom_ratio >= self.dom_A)
+            B = (max_peak >= self.peak_B)
+            C = (energy >= self.sumE2_C) and (max_peak >= self.peak_C) and (dom_ratio >= self.dom_C)
+
+            if A:
+                label, reason = "HIT", f"A(sumE2>={self.sumE2_A:.0f},dom>={self.dom_A:.2f})"
+            elif B:
+                label, reason = "HIT", f"B(peak>={self.peak_B:.0f})"
+            elif C:
+                label, reason = "HIT", f"C(sumE2>={self.sumE2_C:.0f},peak>={self.peak_C:.0f},dom>={self.dom_C:.2f})"
+            else:
+                label, reason = "GHOST", "not_arrow"
+
         # NOTE: delta gating disabled (handled primarily on the PICO)
 
         # Print everything above a floor to avoid spam
         if getattr(self, "debug_print", False) and energy >= getattr(self, "ghost_floor", 0.0):
             print(
                 f"[{label}] sumE={energy:6.1f}  maxE={max_energy:5.1f}  dom={dom_ratio:4.2f}  maxPeak={max_peak:6.1f}  Δ={delta:6.1f}  ema={ema_now:6.1f}  (prev={ema_prev:6.1f})\n"
-                f"       reason={reason}  thr(sumE)={self.min_energy:.1f}  thr(maxE)={self.min_max_energy:.1f}  thr(dom)={self.min_dom_ratio:.2f}  thr(peak)={self.min_peak_abs:.1f}  thr(Δ)=disabled\n"
+                f"       reason={reason}  thr(sumE2)={self.min_energy:.1f}  thr(maxE)={self.min_max_energy:.1f}  thr(dom_floor)={self.min_dom_ratio:.2f}  A>=({self.sumE2_A:.0f},{self.dom_A:.2f})  B>=({self.peak_B:.0f})  C>=({self.sumE2_C:.0f},{self.peak_C:.0f},{self.dom_C:.2f})  thr(Δ)=disabled\n"
                 f"       compass_energy2: N={comp['N']:.1f}  E={comp['E']:.1f}  W={comp['W']:.1f}  S={comp['S']:.1f}"
             )
 
@@ -191,13 +219,16 @@ class UDPProtocol(asyncio.DatagramProtocol):
                 print(f"[DROP_COOLDOWN] sumE={energy:6.1f}  dt={dt:0.3f}s  cooldown={self.cooldown_s:.3f}s")
             return
 
-        # Mode check (only accept in shooting mode)
+        # Mode check (accept in shooting + calibration modes)
         mode = self.mode_getter() if self.mode_getter else None
         if mode is None:
             if getattr(self, "debug_print", False):
                 print("[DROP_MODE] mode=None (mode_getter returned None)")
             return
-        if str(mode).strip() != "shooting":
+
+        mode_s = str(mode).strip().lower()
+        allowed = {"shooting", "calibration", "calibrating"}
+        if mode_s not in allowed:
             if getattr(self, "debug_print", False) and energy >= getattr(self, "ghost_floor", 0.0):
                 print(f"[DROP_MODE] mode={mode!r}")
             return
