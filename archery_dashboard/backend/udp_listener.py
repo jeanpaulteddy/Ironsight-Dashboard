@@ -75,7 +75,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
         self.cooldown_s = 0.7      # duplicate-suppression window
 
         # Energy-mode thresholds (because we now use per-channel "energy" instead of "peak")
-        self.min_energy = 50.0     # sum(E) threshold for HIT vs GHOST
+        self.min_energy = 20.0     # sum(E) threshold for HIT vs GHOST (retuned for arrow energy scale)
         self._energy_ema = 0.0
         self._ema_alpha = 0.05
         self.min_jump = 8.0        # energy must jump above EMA by this amount
