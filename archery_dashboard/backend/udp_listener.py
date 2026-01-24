@@ -72,12 +72,12 @@ class UDPProtocol(asyncio.DatagramProtocol):
         self.fit_getter = fit_getter
         self._last_accept_ts = 0.0
         self.cooldown_s = 0.7      # tweak later if needed
-        self.min_energy = 1080      # sum of peaks threshold (tune later)
+        self.min_energy = 150.0      # sum of per-channel ENERGY threshold (tune later)
         self._energy_ema = 0.0
         self._ema_alpha = 0.05
-        self.min_jump = 60.0   # tune: 40–120
+        self.min_jump = 20.0   # energy delta threshold (tune later)
         self.debug_print = True
-        self.ghost_floor = 900.0   # don’t spam tiny noise; adjust if needed
+        self.ghost_floor = 50.0   # print smaller events while tuning energy mode
         
     def datagram_received(self, data: bytes, addr):
         try:
