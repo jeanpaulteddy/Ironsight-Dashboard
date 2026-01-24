@@ -75,11 +75,18 @@ class UDPProtocol(asyncio.DatagramProtocol):
         self.cooldown_s = 0.7      # duplicate-suppression window
 
         # Energy-mode thresholds (because we now use per-channel "energy" instead of "peak")
-        self.min_energy = 25.0     # sum(E) threshold for HIT vs GHOST (slightly higher to suppress between-shot triggers)
+        self.min_energy = 25.0     # sum(E) threshold for HIT vs GHOST
+
+        # Arrow-like dominance gate (more reliable than absolute peak):
+        # require one channel to carry a significant fraction of total energy.
+        self.use_dom_gate = True
+        self.min_max_energy = 12.0   # at least one channel must have >= this energy
+        self.min_dom_ratio = 0.35    # max_energy / sumE must be >= this
+
         # Extra gate to suppress false positives: require at least one channel's raw PEAK to be large enough
         # (Arrow impacts tend to produce higher raw peaks than background vibration.)
         self.use_peak_gate = True
-        self.min_peak_abs = 282.0  # tuned: your real arrows are peaking ~281–284; keep just above baseline noise
+        self.min_peak_abs = 282.0  # tuned: your real arrows are peaking ~281–284
 
         self._energy_ema = 0.0
         self._ema_alpha = 0.05
@@ -111,6 +118,10 @@ class UDPProtocol(asyncio.DatagramProtocol):
         ch_peak = {str(i): float(raw_ch.get(str(i), {}).get("peak", 0.0)) for i in range(4)}
         max_peak = max(ch_peak.values()) if ch_peak else 0.0
 
+        max_energy = max(ch_energy.values()) if ch_energy else 0.0
+        sum_energy = sum(ch_energy.values()) if ch_energy else 0.0
+        dom_ratio = (max_energy / sum_energy) if sum_energy > 1e-9 else 0.0
+
         if getattr(self, "debug_print", False):
             hdr = "[BUNDLE]"
             meta = []
@@ -121,6 +132,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
             print(hdr, " ".join(meta))
             print(f"  ch_energy: 0={ch_energy['0']:.1f}  1={ch_energy['1']:.1f}  2={ch_energy['2']:.1f}  3={ch_energy['3']:.1f}")
             print(f"  ch_peak:   0={ch_peak['0']:.1f}  1={ch_peak['1']:.1f}  2={ch_peak['2']:.1f}  3={ch_peak['3']:.1f}   (max={max_peak:.1f})")
+            print(f"  max_energy={max_energy:.1f}  dom_ratio={dom_ratio:.2f}")
 
         comp = extract_compass_peaks(msg, self.ch2comp)
 
@@ -147,6 +159,12 @@ class UDPProtocol(asyncio.DatagramProtocol):
         if energy < self.min_energy:
             label = "GHOST"
             reason = f"energy<{self.min_energy:.1f}"
+        elif getattr(self, "use_dom_gate", False) and (max_energy < getattr(self, "min_max_energy", 0.0)):
+            label = "GHOST"
+            reason = f"maxE<{self.min_max_energy:.1f}"
+        elif getattr(self, "use_dom_gate", False) and (dom_ratio < getattr(self, "min_dom_ratio", 0.0)):
+            label = "GHOST"
+            reason = f"dom<{self.min_dom_ratio:.2f}"
         elif getattr(self, "use_peak_gate", False) and (max_peak < getattr(self, "min_peak_abs", 0.0)):
             label = "GHOST"
             reason = f"peak<{self.min_peak_abs:.1f}"
@@ -155,8 +173,8 @@ class UDPProtocol(asyncio.DatagramProtocol):
         # Print everything above a floor to avoid spam
         if getattr(self, "debug_print", False) and energy >= getattr(self, "ghost_floor", 0.0):
             print(
-                f"[{label}] sumE={energy:6.1f}  maxPeak={max_peak:6.1f}  Δ={delta:6.1f}  ema={ema_now:6.1f}  (prev={ema_prev:6.1f})\n"
-                f"       reason={reason}  thr(sumE)={self.min_energy:.1f}  thr(peak)={self.min_peak_abs:.1f}  thr(Δ)=disabled\n"
+                f"[{label}] sumE={energy:6.1f}  maxE={max_energy:5.1f}  dom={dom_ratio:4.2f}  maxPeak={max_peak:6.1f}  Δ={delta:6.1f}  ema={ema_now:6.1f}  (prev={ema_prev:6.1f})\n"
+                f"       reason={reason}  thr(sumE)={self.min_energy:.1f}  thr(maxE)={self.min_max_energy:.1f}  thr(dom)={self.min_dom_ratio:.2f}  thr(peak)={self.min_peak_abs:.1f}  thr(Δ)=disabled\n"
                 f"       compass_energy: N={comp['N']:.1f}  E={comp['E']:.1f}  W={comp['W']:.1f}  S={comp['S']:.1f}"
             )
 
