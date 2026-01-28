@@ -161,23 +161,6 @@ class UDPProtocol(asyncio.DatagramProtocol):
         sum_energy = sum(ch_energy.values()) if ch_energy else 0.0
         dom_ratio = (max_energy / sum_energy) if sum_energy > 1e-9 else 0.0
 
-        # ----- Mandatory impulse/size gate (prevents taps/idle from scoring as HIT) -----
-        mode = self.mode_getter() if self.mode_getter else None
-        mode_s = str(mode).strip().lower() if mode is not None else "unknown"
-        is_cal = mode_s in {"calibration", "calibrating"}
-
-        # General "too small" reject (tuned from your logs)
-        if (energy < 200.0) and (max_peak < 300.0) and (peak_over < 10.0):
-            label = "GHOST"
-            reason = "too_small(sumE2<200 & peak<300 & pOver<10)"
-        else:
-            # Calibration-specific hard requirement
-            if is_cal and not ((max_peak >= 320.0) or (energy >= 300.0)):
-                label = "GHOST"
-                reason = "cal_requires(peak>=320 OR sumE2>=300)"
-            else:
-                # ... keep your score-based classifier here ...
-                pass
 
         # Extra features for robust arrow-vs-ghost classification
         # peakOver: impulse contrast relative to the other sensors
@@ -219,6 +202,24 @@ class UDPProtocol(asyncio.DatagramProtocol):
         comp = extract_compass_peaks(msg, self.ch2comp)
 
         energy = comp["N"] + comp["E"] + comp["W"] + comp["S"]
+
+# ----- Mandatory impulse/size gate (prevents taps/idle from scoring as HIT) -----
+        mode = self.mode_getter() if self.mode_getter else None
+        mode_s = str(mode).strip().lower() if mode is not None else "unknown"
+        is_cal = mode_s in {"calibration", "calibrating"}
+
+        # General "too small" reject (tuned from your logs)
+        if (energy < 200.0) and (max_peak < 300.0) and (peak_over < 10.0):
+            label = "GHOST"
+            reason = "too_small(sumE2<200 & peak<300 & pOver<10)"
+        else:
+            # Calibration-specific hard requirement
+            if is_cal and not ((max_peak >= 320.0) or (energy >= 300.0)):
+                label = "GHOST"
+                reason = "cal_requires(peak>=320 OR sumE2>=300)"
+            else:
+                # ... keep your score-based classifier here ...
+                pass
 
         # EMA baseline (keep previous for delta explanation)
         ema_prev = self._energy_ema
