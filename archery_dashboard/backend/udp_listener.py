@@ -365,11 +365,56 @@ class UDPProtocol(asyncio.DatagramProtocol):
         # Accept hit (stamp last accept *after* passing all gates)
         self._last_accept_ts = now
 
-        # Compute features + calibrated mapping
-        sx, sy = features_from_peaks(comp["N"], comp["E"], comp["W"], comp["S"])
+        # ----------------------
+        # Robust geometry (axis-reliability gated)
+        # ----------------------
+        pN, pE, pW, pS = comp["N"], comp["E"], comp["W"], comp["S"]
+        eps = 1e-12
+
+        # Base ratios ([-1, +1])
+        sx_raw = (pE - pW) / (pE + pW + eps)
+        sy_raw = (pN - pS) / (pN + pS + eps)
+
+        # Axis energy fractions: how much of total energy supports each axis
+        totalE = pN + pE + pW + pS
+        x_axis_E = pE + pW
+        y_axis_E = pN + pS
+        x_frac = (x_axis_E / (totalE + eps))
+        y_frac = (y_axis_E / (totalE + eps))
+
+        # If an axis has almost no energy, its ratio is dominated by noise.
+        # Blend that axis ratio toward 0 (center) instead of letting it swing wildly.
+        # These defaults are conservative; adjust after a few test runs.
+        x_floor_ratio = 0.18
+        y_floor_ratio = 0.18
+
+        def _blend_to_zero(v: float, frac: float, floor: float) -> float:
+            if frac <= 0.0:
+                return 0.0
+            if frac >= floor:
+                return max(-1.0, min(1.0, v))
+            # Linear blend from 0 at frac=0 to full at frac=floor
+            w = frac / floor
+            return max(-1.0, min(1.0, v * w))
+
+        sx = _blend_to_zero(sx_raw, x_frac, x_floor_ratio)
+        sy = _blend_to_zero(sy_raw, y_frac, y_floor_ratio)
+
+        # Optional: small deadzone to stabilize near-center noise
+        deadzone = 0.03
+        if abs(sx) < deadzone:
+            sx = 0.0
+        if abs(sy) < deadzone:
+            sy = 0.0
+
         fit = self.fit_getter() if self.fit_getter else None
         if getattr(self, "debug_print", False):
-            print(f"[FIT] model={None if not fit else fit.get('model')}")
+            print(
+                f"[FIT] model={None if not fit else fit.get('model')}  "
+                f"x_frac={x_frac:.2f} y_frac={y_frac:.2f}  "
+                f"sx_raw={sx_raw:+.3f} sy_raw={sy_raw:+.3f} -> sx={sx:+.3f} sy={sy:+.3f}"
+            )
+
         x, y = xy_from_features(sx, sy, fit)
         r = math.hypot(x, y)
 
