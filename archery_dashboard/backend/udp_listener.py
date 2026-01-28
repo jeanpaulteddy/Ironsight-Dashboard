@@ -143,6 +143,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
 
         if not (isinstance(msg, dict) and msg.get("type") == "hit_bundle"):
             return
+
         # Pretty bundle separation
         if getattr(self, "debug_print", False) and getattr(self, "pretty_print", False):
             print("\n" + "=" * 68)
@@ -152,21 +153,28 @@ class UDPProtocol(asyncio.DatagramProtocol):
         t_ms = msg.get("t_ms")
 
         raw_ch = msg.get("ch", {})
-        # Stable channel order for readability
-        ch_energy = {str(i): float(raw_ch.get(str(i), {}).get("energy2", raw_ch.get(str(i), {}).get("energy", raw_ch.get(str(i), {}).get("peak", 0.0)))) for i in range(4)}
-        ch_peak = {str(i): float(raw_ch.get(str(i), {}).get("peak", 0.0)) for i in range(4)}
-        max_peak = max(ch_peak.values()) if ch_peak else 0.0
 
+        # Stable channel order for readability
+        ch_energy = {
+            str(i): float(
+                raw_ch.get(str(i), {}).get(
+                    "energy2", raw_ch.get(str(i), {}).get("energy", raw_ch.get(str(i), {}).get("peak", 0.0))
+                )
+            )
+            for i in range(4)
+        }
+        ch_peak = {str(i): float(raw_ch.get(str(i), {}).get("peak", 0.0)) for i in range(4)}
+
+        max_peak = max(ch_peak.values()) if ch_peak else 0.0
         max_energy = max(ch_energy.values()) if ch_energy else 0.0
         sum_energy = sum(ch_energy.values()) if ch_energy else 0.0
         dom_ratio = (max_energy / sum_energy) if sum_energy > 1e-9 else 0.0
 
-
         # Extra features for robust arrow-vs-ghost classification
-        # peakOver: impulse contrast relative to the other sensors
+        # peak_over: impulse contrast relative to the other sensors
         if ch_peak:
             peaks_sorted = sorted(ch_peak.values())
-            peak_median = peaks_sorted[len(peaks_sorted)//2]
+            peak_median = peaks_sorted[len(peaks_sorted) // 2]
             peak_over = max_peak - peak_median
         else:
             peak_median = 0.0
@@ -189,42 +197,33 @@ class UDPProtocol(asyncio.DatagramProtocol):
         if getattr(self, "debug_print", False):
             hdr = "[BUNDLE]"
             meta = []
-            if node is not None: meta.append(f"node={node}")
-            if seq is not None: meta.append(f"seq={seq}")
-            if t_ms is not None: meta.append(f"t_ms={t_ms}")
+            if node is not None:
+                meta.append(f"node={node}")
+            if seq is not None:
+                meta.append(f"seq={seq}")
+            if t_ms is not None:
+                meta.append(f"t_ms={t_ms}")
             meta.append(f"src={addr[0]}:{addr[1]}")
             print(hdr, " ".join(meta))
             print(f"  ch_energy2: 0={ch_energy['0']:.1f}  1={ch_energy['1']:.1f}  2={ch_energy['2']:.1f}  3={ch_energy['3']:.1f}")
-            print(f"  ch_peak:   0={ch_peak['0']:.1f}  1={ch_peak['1']:.1f}  2={ch_peak['2']:.1f}  3={ch_peak['3']:.1f}   (max={max_peak:.1f})")
+            print(
+                f"  ch_peak:   0={ch_peak['0']:.1f}  1={ch_peak['1']:.1f}  2={ch_peak['2']:.1f}  3={ch_peak['3']:.1f}   (max={max_peak:.1f})"
+            )
             print(f"  max_energy={max_energy:.1f}  dom_ratio={dom_ratio:.2f}  top2_ratio={top2_ratio:.2f}")
             print(f"  peak_over={peak_over:.1f}  entropy={entropy:.2f}  peak_med={peak_median:.1f}")
 
+        # Compass-mapped energies (these are energy2 in your bundles)
         comp = extract_compass_peaks(msg, self.ch2comp)
-
         energy = comp["N"] + comp["E"] + comp["W"] + comp["S"]
 
-# ----- Mandatory impulse/size gate (prevents taps/idle from scoring as HIT) -----
+        # Determine mode early (calibration can be stricter)
         mode = self.mode_getter() if self.mode_getter else None
-        mode_s = str(mode).strip().lower() if mode is not None else "unknown"
+        mode_s = str(mode).strip().lower() if mode is not None else ""
         is_cal = mode_s in {"calibration", "calibrating"}
-
-        # General "too small" reject (tuned from your logs)
-        if (energy < 200.0) and (max_peak < 300.0) and (peak_over < 10.0):
-            label = "GHOST"
-            reason = "too_small(sumE2<200 & peak<300 & pOver<10)"
-        else:
-            # Calibration-specific hard requirement
-            if is_cal and not ((max_peak >= 320.0) or (energy >= 300.0)):
-                label = "GHOST"
-                reason = "cal_requires(peak>=320 OR sumE2>=300)"
-            else:
-                # ... keep your score-based classifier here ...
-                pass
 
         # EMA baseline (keep previous for delta explanation)
         ema_prev = self._energy_ema
-        ema_was_uninit = (ema_prev == 0.0)
-        if ema_was_uninit:
+        if ema_prev == 0.0:
             # Initialize EMA from the first observed energy
             self._energy_ema = energy
             ema_prev = energy
@@ -235,15 +234,11 @@ class UDPProtocol(asyncio.DatagramProtocol):
         self._energy_ema = (1 - self._ema_alpha) * self._energy_ema + self._ema_alpha * energy
         ema_now = self._energy_ema
 
-        # Classify + explain
-        # NOTE: `energy` here is sum of compass_energy2, so it's effectively sumE2.
+        # ----------------------
+        # Classification
+        # ----------------------
         label = "HIT"
         reason = "pass"
-
-        # Determine mode early so calibration can be stricter
-        mode = self.mode_getter() if self.mode_getter else None
-        mode_s = str(mode).strip().lower() if mode is not None else ""
-        is_cal = mode_s in {"calibration", "calibrating"}
 
         # Hard rejects first
         if energy < self.min_energy:
@@ -256,59 +251,84 @@ class UDPProtocol(asyncio.DatagramProtocol):
             label = "GHOST"
             reason = f"dom<{self.min_dom_ratio:.2f}"
         else:
-            # Multi-feature score classifier
-            score = 0
-            why = []
+            # --- Mandatory impulse/size gate ---
+            # Prevents arrow removal / slow presses from scoring as HIT.
+            # Pass if ANY of these show impact evidence.
+            has_impact = (energy >= 300.0) or (max_peak >= 300.0) or (peak_over >= 10.0)
 
-            if energy >= self.score_sumE2_1:
-                score += 2; why.append(f"sumE2>={self.score_sumE2_1:.0f}(+2)")
-            if energy >= self.score_sumE2_2:
-                score += 3; why.append(f"sumE2>={self.score_sumE2_2:.0f}(+3)")
-
-            if max_peak >= self.score_peak_1:
-                score += 2; why.append(f"peak>={self.score_peak_1:.0f}(+2)")
-            if max_peak >= self.score_peak_2:
-                score += 3; why.append(f"peak>={self.score_peak_2:.0f}(+3)")
-
-            if dom_ratio >= self.score_dom_1:
-                score += 2; why.append(f"dom>={self.score_dom_1:.2f}(+2)")
-            if dom_ratio >= self.score_dom_2:
-                score += 3; why.append(f"dom>={self.score_dom_2:.2f}(+3)")
-
-            if peak_over >= self.score_peak_over:
-                score += 2; why.append(f"peakOver>={self.score_peak_over:.0f}(+2)")
-
-            if entropy <= self.score_entropy_max:
-                score += 2; why.append(f"entropy<={self.score_entropy_max:.2f}(+2)")
-
-            if top2_ratio >= self.score_top2_ratio:
-                score += 2; why.append(f"top2>={self.score_top2_ratio:.2f}(+2)")
-
-            thresh = self.score_thresh_calibration if is_cal else self.score_thresh_shooting
-
-            if getattr(self, "use_score_classifier", True):
-                if score >= thresh:
-                    label = "HIT"
-                    reason = f"score={score}/{thresh} " + ",".join(why)
-                else:
-                    label = "GHOST"
-                    reason = f"score={score}/{thresh} " + ",".join(why)
+            # Extra small-event reject (helps keep logs clean and blocks weak structured noise)
+            if (energy < 200.0) and (max_peak < 300.0) and (peak_over < 10.0):
+                label = "GHOST"
+                reason = "too_small(sumE2<200 & peak<300 & pOver<10)"
+            elif not has_impact:
+                label = "GHOST"
+                reason = "no_impact(sumE2<300 & peak<300 & pOver<10)"
             else:
-                # Legacy A/B/C fallback
-                A = (energy >= self.sumE2_A) and (dom_ratio >= self.dom_A)
-                B = (max_peak >= self.peak_B)
-                C = (energy >= self.sumE2_C) and (max_peak >= self.peak_C) and (dom_ratio >= self.dom_C)
-
-                if A:
-                    label, reason = "HIT", f"A(sumE2>={self.sumE2_A:.0f},dom>={self.dom_A:.2f})"
-                elif B:
-                    label, reason = "HIT", f"B(peak>={self.peak_B:.0f})"
-                elif C:
-                    label, reason = "HIT", f"C(sumE2>={self.sumE2_C:.0f},peak>={self.peak_C:.0f},dom>={self.dom_C:.2f})"
+                # Calibration-specific hard requirement
+                if is_cal and not ((max_peak >= 320.0) or (energy >= 300.0)):
+                    label = "GHOST"
+                    reason = "cal_requires(peak>=320 OR sumE2>=300)"
                 else:
-                    label, reason = "GHOST", "not_arrow"
+                    # Multi-feature score classifier
+                    score = 0
+                    why = []
 
-        # NOTE: delta gating disabled (handled primarily on the PICO)
+                    if energy >= self.score_sumE2_1:
+                        score += 2
+                        why.append(f"sumE2>={self.score_sumE2_1:.0f}(+2)")
+                    if energy >= self.score_sumE2_2:
+                        score += 3
+                        why.append(f"sumE2>={self.score_sumE2_2:.0f}(+3)")
+
+                    if max_peak >= self.score_peak_1:
+                        score += 2
+                        why.append(f"peak>={self.score_peak_1:.0f}(+2)")
+                    if max_peak >= self.score_peak_2:
+                        score += 3
+                        why.append(f"peak>={self.score_peak_2:.0f}(+3)")
+
+                    if dom_ratio >= self.score_dom_1:
+                        score += 2
+                        why.append(f"dom>={self.score_dom_1:.2f}(+2)")
+                    if dom_ratio >= self.score_dom_2:
+                        score += 3
+                        why.append(f"dom>={self.score_dom_2:.2f}(+3)")
+
+                    if peak_over >= self.score_peak_over:
+                        score += 2
+                        why.append(f"peakOver>={self.score_peak_over:.0f}(+2)")
+
+                    if entropy <= self.score_entropy_max:
+                        score += 2
+                        why.append(f"entropy<={self.score_entropy_max:.2f}(+2)")
+
+                    if top2_ratio >= self.score_top2_ratio:
+                        score += 2
+                        why.append(f"top2>={self.score_top2_ratio:.2f}(+2)")
+
+                    thresh = self.score_thresh_calibration if is_cal else self.score_thresh_shooting
+
+                    if getattr(self, "use_score_classifier", True):
+                        if score >= thresh:
+                            label = "HIT"
+                            reason = f"score={score}/{thresh} " + ",".join(why)
+                        else:
+                            label = "GHOST"
+                            reason = f"score={score}/{thresh} " + ",".join(why)
+                    else:
+                        # Legacy A/B/C fallback
+                        A = (energy >= self.sumE2_A) and (dom_ratio >= self.dom_A)
+                        B = (max_peak >= self.peak_B)
+                        C = (energy >= self.sumE2_C) and (max_peak >= self.peak_C) and (dom_ratio >= self.dom_C)
+
+                        if A:
+                            label, reason = "HIT", f"A(sumE2>={self.sumE2_A:.0f},dom>={self.dom_A:.2f})"
+                        elif B:
+                            label, reason = "HIT", f"B(peak>={self.peak_B:.0f})"
+                        elif C:
+                            label, reason = "HIT", f"C(sumE2>={self.sumE2_C:.0f},peak>={self.peak_C:.0f},dom>={self.dom_C:.2f})"
+                        else:
+                            label, reason = "GHOST", "not_arrow"
 
         # Print everything above a floor to avoid spam
         if getattr(self, "debug_print", False) and energy >= getattr(self, "ghost_floor", 0.0):
@@ -320,14 +340,6 @@ class UDPProtocol(asyncio.DatagramProtocol):
 
         # If it’s not a valid hit, stop here
         if label != "HIT":
-            return
-
-        # Cooldown (avoid duplicates)
-        now = time.time()
-        dt = now - self._last_accept_ts
-        if dt < self.cooldown_s:
-            if getattr(self, "debug_print", False) and energy >= getattr(self, "ghost_floor", 0.0):
-                print(f"[DROP_COOLDOWN] sumE={energy:6.1f}  dt={dt:0.3f}s  cooldown={self.cooldown_s:.3f}s")
             return
 
         # Mode check (accept in shooting + calibration modes)
@@ -342,6 +354,14 @@ class UDPProtocol(asyncio.DatagramProtocol):
                 print(f"[DROP_MODE] mode={mode!r}")
             return
 
+        # Cooldown (avoid duplicates)
+        now = time.time()
+        dt = now - self._last_accept_ts
+        if dt < self.cooldown_s:
+            if getattr(self, "debug_print", False) and energy >= getattr(self, "ghost_floor", 0.0):
+                print(f"[DROP_COOLDOWN] sumE={energy:6.1f}  dt={dt:0.3f}s  cooldown={self.cooldown_s:.3f}s")
+            return
+
         # Accept hit (stamp last accept *after* passing all gates)
         self._last_accept_ts = now
 
@@ -353,7 +373,6 @@ class UDPProtocol(asyncio.DatagramProtocol):
         x, y = xy_from_features(sx, sy, fit)
         r = math.hypot(x, y)
 
-        # Optional: print sx/sy only for accepted hits
         if getattr(self, "debug_print", False):
             print(f"[ACCEPT] sx={sx:+.3f}  sy={sy:+.3f}  x={x:+.4f}m  y={y:+.4f}m  r={r:.4f}m")
 
