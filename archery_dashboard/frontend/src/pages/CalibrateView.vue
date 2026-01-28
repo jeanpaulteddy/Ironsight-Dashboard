@@ -84,9 +84,8 @@ async function loadRings() {
 }
 
 function outerRadiusM() {
-  // outer scoring ring ("1") is our full target radius in meters
-  // fallback: max numeric ring
-  if (typeof rings.value["1"] === "number") return rings.value["1"]
+  // Use the largest numeric ring radius as the full target radius.
+  // This avoids configs where the key "1" is not the outermost ring.
   let mx = 0
   for (const [k, v] of Object.entries(rings.value)) {
     if (k === "X") continue
@@ -154,7 +153,7 @@ function onTargetClick(ev) {
   const px = ev.clientX - cx
   const py = ev.clientY - cy
 
-  const radiusPx = rect.width / 2
+  const radiusPx = Math.min(rect.width, rect.height) / 2
   const nx = px / radiusPx
   const ny = -py / radiusPx // invert y
 
@@ -162,6 +161,16 @@ function onTargetClick(ev) {
   const Rm = outerRadiusM()
   const x_gt = nx * Rm
   const y_gt = ny * Rm
+
+  console.log("CAL_CLICK", {
+    rect: { w: rect.width, h: rect.height },
+    radiusPx,
+    nx,
+    ny,
+    Rm,
+    x_gt,
+    y_gt,
+  })
 
   fetch(`${API}/api/calibration/confirm`, {
     method: "POST",
