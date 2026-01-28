@@ -144,33 +144,40 @@ async function computeCal() {
 function onTargetClick(ev) {
   if (done.value) return
   if (paused.value) return
-  if (!pending.value) return // ignore clicks until a shot is pending
+  if (!pending.value) return
 
-  const rect = ev.currentTarget.getBoundingClientRect()
-  const cx = rect.left + rect.width / 2
-  const cy = rect.top + rect.height / 2
+  // IMPORTANT: use the canvas rect, not the wrapper div rect
+  const canvasEl = ev.currentTarget.querySelector("canvas")
+  if (!canvasEl) return
 
-  const px = ev.clientX - cx
-  const py = ev.clientY - cy
+  const rect = canvasEl.getBoundingClientRect()
 
-  const radiusPx = Math.min(rect.width, rect.height) / 2
-  const nx = px / radiusPx
-  const ny = -py / radiusPx // invert y
+  // Map CSS pixels -> canvas pixels (because canvas internal units are fixed at 520)
+  const SIZE = 520
+  const CX = SIZE / 2
+  const CY = SIZE / 2
+  const PAD = 14
+  const scaleX = SIZE / rect.width
+  const scaleY = SIZE / rect.height
 
-  // convert normalized coords -> meters using outer ring radius
+  const xCanvas = (ev.clientX - rect.left) * scaleX
+  const yCanvas = (ev.clientY - rect.top) * scaleY
+
+  const px = xCanvas - CX
+  const py = yCanvas - CY
+
+  // This must match TargetView's effective drawing radius
+  const radiusCanvas = (CX - PAD)
+
+  const nx = px / radiusCanvas
+  const ny = -py / radiusCanvas // invert y
+
   const Rm = outerRadiusM()
   const x_gt = nx * Rm
   const y_gt = ny * Rm
 
-  console.log("CAL_CLICK", {
-    rect: { w: rect.width, h: rect.height },
-    radiusPx,
-    nx,
-    ny,
-    Rm,
-    x_gt,
-    y_gt,
-  })
+  // (optional) debug
+  console.log("CAL_CLICK", { rect: { w: rect.width, h: rect.height }, nx, ny, Rm, x_gt, y_gt })
 
   fetch(`${API}/api/calibration/confirm`, {
     method: "POST",
