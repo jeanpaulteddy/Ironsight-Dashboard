@@ -102,8 +102,10 @@ async def _startup_pose_listener():
 async def dispatch_loop():
     while True:
         evt = await queue.get()
+        print(f"[DISPATCH] Received event: x={evt.get('x')}, y={evt.get('y')}, r={evt.get('r')}")
         # If we're calibrating, capture a pending shot instead of recording it
         if calibration.get("active"):
+            print(f"[DISPATCH] Calibration active, creating pending shot")
             # Only accept one pending shot at a time
             
             if calibration.get("paused"):
@@ -143,6 +145,7 @@ async def dispatch_loop():
             continue
 
         # Normal mode: compute score + record shot
+        print(f"[DISPATCH] Normal mode, processing shot")
         score, is_x = score_from_r(evt["r"])
         shot = Shot(
             ts=time.time(),
@@ -153,6 +156,7 @@ async def dispatch_loop():
             is_x=is_x,
         )
         state.add_shot(shot)
+        print(f"[DISPATCH] Shot recorded: score={score}, is_x={is_x}")
 
         payload = {
             "type": "shot",
@@ -170,10 +174,13 @@ async def dispatch_loop():
         for ws in list(clients):
             try:
                 await ws.send_json(payload)
-            except Exception:
+                print(f"[DISPATCH] Broadcasted shot to WebSocket client")
+            except Exception as e:
+                print(f"[DISPATCH] Failed to send to client: {e}")
                 dead.append(ws)
         for ws in dead:
             clients.discard(ws)
+        print(f"[DISPATCH] Broadcast complete, {len(clients)} clients remaining")
 
 def _save_fit_to_disk(fit: dict):
     tmp = CAL_FIT_PATH + ".tmp"
