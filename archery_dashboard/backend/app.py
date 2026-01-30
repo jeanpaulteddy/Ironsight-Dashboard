@@ -1,9 +1,10 @@
 # backend/app.py
 import asyncio, time
 import os,json
-from typing import Set
+from typing import Set, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect # type: ignore
 from fastapi.middleware.cors import CORSMiddleware # type: ignore
+from fastapi.staticfiles import StaticFiles # type: ignore
 from pose_udp_listener import start_pose_udp_listener, get_latest_pose
 import numpy as np # type: ignore
 import config
@@ -13,9 +14,16 @@ from udp_listener import udp_loop
 from pydantic import BaseModel # type: ignore
 import threading
 from mode_state import get_mode, set_mode
+import database
+from session_manager import SessionManager
 
 
 app = FastAPI()
+
+# Mount static file serving for screenshots
+screenshots_dir = os.path.join(os.path.dirname(__file__), config.SCREENSHOTS_DIR)
+os.makedirs(screenshots_dir, exist_ok=True)
+app.mount("/screenshots", StaticFiles(directory=screenshots_dir), name="screenshots")
 
 calibration = {
     "active": False,
@@ -35,12 +43,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 _mode_lock = threading.Lock()
-_mode = "shooting"  # or "scoring" if you prefer starting “safe”
+_mode = "shooting"  # or "scoring" if you prefer starting "safe"
 _pose_clients: set[WebSocket] = set()
 _pose_queue: asyncio.Queue = asyncio.Queue()
 clients: Set[WebSocket] = set()
 state = SessionState()
 queue: asyncio.Queue = asyncio.Queue(maxsize=200)
+
+# Session manager for tracking active sessions
+session_manager = SessionManager()
 
 def get_fit():
     # return the currently active calibration fit (or None)
@@ -77,6 +88,9 @@ CH2COMP = {"0": "N", "1": "W", "2": "S", "3": "E"}
 
 @app.on_event("startup")
 async def startup():
+    # Initialize database
+    await database.init_db()
+
     # start UDP loop and broadcast loop
     global calibration_fit
     try:
@@ -155,8 +169,17 @@ async def dispatch_loop():
             score=score,
             is_x=is_x,
         )
+
+        # Add to legacy state (for backward compatibility)
         state.add_shot(shot)
         print(f"[DISPATCH] Shot recorded: score={score}, is_x={is_x}")
+
+        # If there's an active session, add to session manager with screenshot
+        if session_manager.has_active_session():
+            posture = get_latest_pose()
+            await session_manager.add_shot(shot, posture)
+        else:
+            print("[DISPATCH] No active session - shot not saved to database")
 
         payload = {
             "type": "shot",
@@ -267,6 +290,80 @@ def api_set_mode(payload: ModeIn):
     after = get_mode()
     print("[MODE] before=", before, "requested=", payload.mode, "after=", after)
     return {"mode": after}
+
+# ========== Session Management Endpoints ==========
+
+class SessionStartRequest(BaseModel):
+    arrows_per_end: int
+    num_ends: int
+    notes: Optional[str] = None
+
+@app.post("/api/session/start")
+async def start_session(payload: SessionStartRequest):
+    """Start a new training session"""
+    session_id = await session_manager.start_session(
+        arrows_per_end=payload.arrows_per_end,
+        num_ends=payload.num_ends,
+        notes=payload.notes
+    )
+    return {"ok": True, "session_id": session_id}
+
+@app.get("/api/session/current")
+def get_current_session():
+    """Get information about the current active session"""
+    session_info = session_manager.get_session_info()
+    if session_info is None:
+        return {"ok": False, "message": "No active session"}
+    return {"ok": True, **session_info}
+
+@app.post("/api/session/end")
+async def end_session():
+    """Manually end the current session"""
+    if not session_manager.has_active_session():
+        return {"ok": False, "message": "No active session"}
+
+    await session_manager.end_session()
+    return {"ok": True}
+
+@app.get("/api/sessions")
+async def list_sessions(
+    limit: int = 50,
+    offset: int = 0,
+    start_date: Optional[float] = None,
+    end_date: Optional[float] = None,
+    complete_only: bool = False
+):
+    """List all sessions with filtering and pagination"""
+    result = await database.list_sessions(
+        limit=limit,
+        offset=offset,
+        start_date=start_date,
+        end_date=end_date,
+        complete_only=complete_only
+    )
+    return result
+
+@app.get("/api/sessions/{session_id}")
+async def get_session(session_id: int):
+    """Get full details of a specific session"""
+    session = await database.get_session(session_id)
+    if session is None:
+        return {"ok": False, "error": "Session not found"}
+    return {"ok": True, "session": session}
+
+@app.delete("/api/sessions/{session_id}")
+async def delete_session_endpoint(session_id: int):
+    """Delete a session and its associated data"""
+    await database.delete_session(session_id)
+    return {"ok": True}
+
+@app.get("/api/sessions/{session_id}/stats")
+async def get_session_stats(session_id: int):
+    """Get statistics for a specific session"""
+    stats = await database.get_session_stats(session_id)
+    if stats is None:
+        return {"ok": False, "error": "Session not found"}
+    return {"ok": True, "stats": stats}
 
 @app.post("/api/calibration/start")
 def cal_start():

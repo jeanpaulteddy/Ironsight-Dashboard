@@ -19,3 +19,8 @@ RINGS_M = {
 
 ARROWS_PER_END = 3
 MAX_ENDS = 10
+
+# Database and storage paths
+DATABASE_PATH = "data/archery.db"
+SCREENSHOTS_DIR = "data/screenshots"
+STREAM_URL = "http://localhost:8081/stream"

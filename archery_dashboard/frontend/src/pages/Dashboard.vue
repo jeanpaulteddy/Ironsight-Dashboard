@@ -1,7 +1,23 @@
 <template>
   <div class="page">
     <header class="topbar">
-      <div class="title">IronSight Dashboard</div>
+      <div class="header-row">
+        <div class="title">IronSight Dashboard</div>
+        <div class="session-info" v-if="currentSession">
+          <div class="session-progress">
+            <span class="session-label">Session Progress:</span>
+            <span class="session-arrows">{{ currentSession.current_arrows }}/{{ currentSession.target_arrows }} arrows</span>
+            <span class="session-ends">End {{ currentSession.current_end }}/{{ currentSession.num_ends }}</span>
+          </div>
+          <div class="session-score">
+            Score: {{ currentSession.total_score }}
+          </div>
+        </div>
+        <div v-else class="no-session-warning">
+          <span>⚠️ No active session - shots will not be saved</span>
+          <button class="btn btn-primary btn-sm" @click="showConfigModal = true">Start Session</button>
+        </div>
+      </div>
       <div class="modebar">
       <div class="modebadge" :class="mode">
         Mode: {{ mode }}
@@ -70,6 +86,13 @@
           </div>
         </div>
     </main>
+
+    <!-- Session Config Modal -->
+    <SessionConfigModal
+      v-if="showConfigModal"
+      @close="showConfigModal = false"
+      @start="startSession"
+    />
   </div>
 </template>
 
@@ -77,6 +100,7 @@
 import { ref, onMounted } from "vue"
 import TargetView from "../components/TargetView.vue"
 import ScoreTable from "../components/ScoreTable.vue"
+import SessionConfigModal from "../components/SessionConfigModal.vue"
 
 const host = window.location.hostname
 const API = `http://${host}:8000`
@@ -92,6 +116,11 @@ const _lastTipsAt = ref(0)             // rate limit tips text
 const _tips = ref([])                  // stable tips array
 
 const mode = ref("shooting")
+
+// Session management
+const currentSession = ref(null)
+const showConfigModal = ref(false)
+const sessionComplete = ref(false)
 
 async function refreshMode() {
   const r = await fetch(`${API}/api/mode`)
@@ -121,7 +150,42 @@ function postureClass(score) {
   return "bad"
 }
 
+async function checkActiveSession() {
+  try {
+    const response = await fetch(`${API}/api/session/current`)
+    const data = await response.json()
+    if (data.ok && data.session_id) {
+      currentSession.value = data
+    } else {
+      currentSession.value = null
+    }
+  } catch (error) {
+    console.error('Failed to check active session:', error)
+  }
+}
+
+async function startSession(config) {
+  try {
+    const response = await fetch(`${API}/api/session/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config)
+    })
+    const data = await response.json()
+
+    if (data.ok) {
+      showConfigModal.value = false
+      await checkActiveSession()
+    }
+  } catch (error) {
+    console.error('Failed to start session:', error)
+  }
+}
+
 onMounted(async () => {
+  // Check for active session
+  await checkActiveSession()
+
   const shotsRes = await fetch(`${API}/api/shots`)
   const stRes = await fetch(`${API}/api/state`)
   table.value = await stRes.json()
@@ -142,6 +206,19 @@ onMounted(async () => {
       shots.value.push(msg.shot)
       table.value = msg.table
       stateText.value = JSON.stringify(table.value, null, 2)
+
+      // Update session info after shot
+      checkActiveSession()
+
+      // Check if session is complete
+      if (table.value.is_complete) {
+        sessionComplete.value = true
+        setTimeout(() => {
+          if (confirm('Session complete! View session details?')) {
+            window.location.href = '/sessions'
+          }
+        }, 1000)
+      }
     }
   }
   const wsPose = new WebSocket(`ws://${location.hostname}:8000/ws_pose`)
@@ -325,4 +402,87 @@ onMounted(async () => {
 
 .modebtns{ display:flex; gap:8px; }
 .btn.active{ outline:2px solid rgba(255,255,255,0.25); }
+
+/* Session UI */
+.header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.session-info {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.5rem 1rem;
+  background: rgba(31, 111, 235, 0.1);
+  border: 1px solid rgba(31, 111, 235, 0.3);
+  border-radius: 8px;
+}
+
+.session-progress {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.875rem;
+}
+
+.session-label {
+  font-weight: 600;
+  opacity: 0.8;
+}
+
+.session-arrows {
+  font-weight: 700;
+  color: #1f6feb;
+}
+
+.session-ends {
+  opacity: 0.7;
+}
+
+.session-score {
+  font-weight: 700;
+  font-size: 1.125rem;
+  color: #1f6feb;
+}
+
+.no-session-warning {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.5rem 1rem;
+  background: rgba(255, 184, 0, 0.1);
+  border: 1px solid rgba(255, 184, 0, 0.3);
+  border-radius: 8px;
+  font-size: 0.875rem;
+}
+
+.btn-primary {
+  background: #1f6feb;
+  color: white;
+}
+
+.btn-primary:hover {
+  background: #1a5cd7;
+}
+
+.btn-sm {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.875rem;
+}
+
+@media (max-width: 768px) {
+  .header-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .session-info, .no-session-warning {
+    width: 100%;
+  }
+}
 </style>

@@ -1,0 +1,11 @@
+# Ignore database files
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# Ignore screenshots
+screenshots/
+
+# But keep the directory structure
+!.gitignore
