@@ -409,8 +409,14 @@ class UDPProtocol(asyncio.DatagramProtocol):
 
         fit = self.fit_getter() if self.fit_getter else None
         if getattr(self, "debug_print", False):
+            fit_info = None if not fit else fit.get('model')
+            if fit and fit.get('params'):
+                # Show first 2 coefficients to verify calibration is loaded
+                x_coeffs = fit['params'].get('x', [])
+                y_coeffs = fit['params'].get('y', [])
+                fit_info = f"{fit.get('model')} x[0:2]={x_coeffs[0:2] if x_coeffs else 'N/A'} y[0:2]={y_coeffs[0:2] if y_coeffs else 'N/A'}"
             print(
-                f"[FIT] model={None if not fit else fit.get('model')}  "
+                f"[FIT] {fit_info}  "
                 f"x_frac={x_frac:.2f} y_frac={y_frac:.2f}  "
                 f"sx_raw={sx_raw:+.3f} sy_raw={sy_raw:+.3f} -> sx={sx:+.3f} sy={sy:+.3f}"
             )
