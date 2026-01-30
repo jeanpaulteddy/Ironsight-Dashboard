@@ -84,15 +84,18 @@ async function loadRings() {
 }
 
 function outerRadiusM() {
-  // Use the largest numeric ring radius as the full target radius.
-  // This avoids configs where the key "1" is not the outermost ring.
-  let mx = 0
-  for (const [k, v] of Object.entries(rings.value)) {
-    if (k === "X") continue
-    const num = Number(k)
-    if (Number.isFinite(num) && typeof v === "number") mx = Math.max(mx, v)
+  // Get ring 1 radius (outermost ring for standard target)
+  // This matches TargetView's maxR calculation for consistent SCALE
+  const ring1 = rings.value?.["1"]
+  const base = (typeof ring1 === "number") ? ring1 : 0.25
+
+  // Also consider any pending dot position so scale matches display
+  let maxShot = 0
+  for (const s of pendingDot.value) {
+    if (typeof s.r === "number" && s.r > maxShot) maxShot = s.r
   }
-  return mx || 0.5
+
+  return Math.max(base, maxShot)
 }
 
 async function startCal() {
@@ -169,15 +172,27 @@ function onTargetClick(ev) {
   // This must match TargetView's effective drawing radius
   const radiusCanvas = (CX - PAD)
 
-  const nx = px / radiusCanvas
-  const ny = -py / radiusCanvas // invert y
-
+  // Calculate SCALE to match TargetView's coordinate system
+  // TargetView uses: SCALE = (CX - PAD) / maxR
+  // This ensures calibration and display use identical transformations
   const Rm = outerRadiusM()
-  const x_gt = nx * Rm
-  const y_gt = ny * Rm
+  const SCALE = radiusCanvas / Rm  // pixels per meter
 
-  // (optional) debug
-  console.log("CAL_CLICK", { rect: { w: rect.width, h: rect.height }, nx, ny, Rm, x_gt, y_gt })
+  // Convert canvas pixels directly to meters
+  const x_gt = px / SCALE
+  const y_gt = -py / SCALE  // Invert Y (canvas Y down, target Y up)
+
+  // Enhanced debug logging
+  console.log("CAL_CLICK", {
+    rect: { w: rect.width, h: rect.height },
+    canvas: { x: xCanvas, y: yCanvas },
+    relative: { px, py },
+    radiusCanvas,
+    Rm,
+    SCALE,
+    x_gt,
+    y_gt
+  })
 
   fetch(`${API}/api/calibration/confirm`, {
     method: "POST",
