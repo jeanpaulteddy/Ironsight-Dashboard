@@ -32,6 +32,57 @@
       </div>
     </div>
 
+    <div v-if="showResults && fit" class="pauseOverlay">
+      <div class="resultsCard">
+        <div class="resultsTitle">Calibration Results</div>
+
+        <div class="resultsGrid">
+          <div class="resultMetric">
+            <div class="metricLabel">Mean Error</div>
+            <div class="metricValue" :class="fit.mean_error_cm < 2 ? 'good' : fit.mean_error_cm < 5 ? 'warn' : 'bad'">
+              {{ fit.mean_error_cm.toFixed(2) }} cm
+            </div>
+          </div>
+
+          <div class="resultMetric">
+            <div class="metricLabel">Max Error</div>
+            <div class="metricValue" :class="fit.max_error_cm < 3 ? 'good' : fit.max_error_cm < 5 ? 'warn' : 'bad'">
+              {{ fit.max_error_cm.toFixed(2) }} cm
+            </div>
+          </div>
+
+          <div class="resultMetric">
+            <div class="metricLabel">Accuracy</div>
+            <div class="metricValue" :class="accuracyPct > 90 ? 'good' : accuracyPct > 70 ? 'warn' : 'bad'">
+              {{ accuracyPct.toFixed(1) }}%
+            </div>
+          </div>
+
+          <div class="resultMetric">
+            <div class="metricLabel">Samples</div>
+            <div class="metricValue">{{ fit.n }}</div>
+          </div>
+        </div>
+
+        <div class="resultsText">
+          <div v-if="fit.mean_error_cm < 2 && fit.max_error_cm < 3">
+            ✅ Excellent calibration! Ready for accurate shooting.
+          </div>
+          <div v-else-if="fit.mean_error_cm < 5 && fit.max_error_cm < 8">
+            ⚠️ Good calibration, but could be improved with more samples or more accurate clicks.
+          </div>
+          <div v-else>
+            ❌ Poor calibration. Consider restarting and clicking more accurately.
+          </div>
+        </div>
+
+        <div class="resultsActions">
+          <button class="btn btnPrimary" @click="applyAndGo">Apply & Start Shooting</button>
+          <button class="btn btnSecondary" @click="restartFromResults">Restart Calibration</button>
+        </div>
+      </div>
+    </div>
+
     <div class="targetWrap">
       <div
         v-if="Object.keys(rings).length"
@@ -69,9 +120,20 @@ const inSet = ref(0)
 const paused = ref(false)
 const fit = ref(null)
 const fitErr = ref(null)
+const showResults = ref(false)
 
 const totalTarget = 20
 const done = computed(() => sampleCount.value >= totalTarget)
+
+// Calculate accuracy percentage from error
+const accuracyPct = computed(() => {
+  if (!fit.value || !fit.value.mean_error_cm) return 0
+  // Assume ring 1 radius is ~20cm (200mm), so perfect accuracy at center
+  // Mean error of 2cm = 90% accuracy, 1cm = 95%, 0.5cm = 97.5%
+  const maxErrorForCalc = 10 // cm - beyond this is 0%
+  const pct = Math.max(0, 100 - (fit.value.mean_error_cm / maxErrorForCalc * 100))
+  return Math.min(100, pct)
+})
 
 // show a faint dot for the detected (uncalibrated) location so you can compare
 const pendingDot = ref([])
@@ -120,7 +182,7 @@ async function computeCal() {
   fit.value = null
 
   try {
-    // 1) compute
+    // 1) compute only (don't apply yet)
     const r1 = await fetch(`${API}/api/calibration/compute`, { method: "POST" })
     const j1 = await r1.json()
     if (!j1.ok) {
@@ -129,7 +191,16 @@ async function computeCal() {
     }
     fit.value = j1
 
-    // 2) apply (save + stop calibration + set mode shooting)
+    // 2) show results overlay
+    showResults.value = true
+  } catch (e) {
+    fitErr.value = String(e)
+  }
+}
+
+async function applyAndGo() {
+  try {
+    // Apply calibration (save + stop calibration + set mode shooting)
     const r2 = await fetch(`${API}/api/calibration/apply`, { method: "POST" })
     const j2 = await r2.json()
     if (!j2.ok) {
@@ -137,11 +208,16 @@ async function computeCal() {
       return
     }
 
-    // 3) send user back to normal dashboard
+    // Redirect to dashboard
     window.location.href = "/"
   } catch (e) {
     fitErr.value = String(e)
   }
+}
+
+async function restartFromResults() {
+  showResults.value = false
+  await startCal()
 }
 
 function onTargetClick(ev) {
@@ -327,4 +403,104 @@ onMounted(async () => {
 .fitTitle{ font-weight: 900; margin-bottom: 6px; }
 .fitRow{ font-size: 13px; opacity: 0.9; margin: 2px 0; }
 .fitErr{ color: rgba(255,120,120,0.95); font-weight: 800; }
+
+/* Results overlay */
+.resultsCard {
+  width: min(580px, 92vw);
+  background: rgba(20,25,35,0.98);
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 20px;
+  padding: 24px;
+  text-align: center;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+}
+
+.resultsTitle {
+  font-size: 24px;
+  font-weight: 900;
+  margin-bottom: 20px;
+  color: #fff;
+}
+
+.resultsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.resultMetric {
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.metricLabel {
+  font-size: 12px;
+  opacity: 0.7;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+.metricValue {
+  font-size: 28px;
+  font-weight: 900;
+  color: #e7ecf5;
+}
+
+.metricValue.good { color: rgba(60, 220, 120, 0.95); }
+.metricValue.warn { color: rgba(255, 200, 60, 0.95); }
+.metricValue.bad { color: rgba(255, 90, 90, 0.95); }
+
+.resultsText {
+  background: rgba(255,255,255,0.06);
+  border-radius: 12px;
+  padding: 14px;
+  margin-bottom: 20px;
+  font-size: 14px;
+  line-height: 1.5;
+  font-weight: 600;
+}
+
+.resultsActions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.btnPrimary {
+  background: rgba(60, 220, 120, 0.2);
+  border: 2px solid rgba(60, 220, 120, 0.5);
+  color: rgba(60, 220, 120, 1);
+  font-weight: 900;
+  padding: 12px 24px;
+  font-size: 14px;
+}
+
+.btnPrimary:hover {
+  background: rgba(60, 220, 120, 0.3);
+  border-color: rgba(60, 220, 120, 0.7);
+}
+
+.btnSecondary {
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.2);
+  color: #e7ecf5;
+  padding: 12px 24px;
+  font-size: 14px;
+}
+
+.btnSecondary:hover {
+  background: rgba(255,255,255,0.12);
+}
+
+@media (max-width: 600px) {
+  .resultsGrid {
+    grid-template-columns: 1fr;
+  }
+}
 </style>
