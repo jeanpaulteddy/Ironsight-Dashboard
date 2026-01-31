@@ -266,6 +266,14 @@ def _compute_fit_internal(samples: list) -> tuple[dict | None, str | None]:
     # Apply fit immediately so next arrow uses it
     calibration_fit = {"model": "poly2_sxsy", "params": params}
 
+    print("=" * 60)
+    print(f"[CAL] *** NEW FIT COMPUTED & APPLIED ({len(err)} samples) ***")
+    print(f"[CAL]   Mean error: {mean_cm:.2f} cm")
+    print(f"[CAL]   Max error:  {max_cm:.2f} cm")
+    print(f"[CAL]   X coeffs: {[f'{v:.6f}' for v in px.tolist()]}")
+    print(f"[CAL]   Y coeffs: {[f'{v:.6f}' for v in py.tolist()]}")
+    print("=" * 60)
+
     fit_result = {
         "model": "poly2_sxsy",
         "params": params,
@@ -469,10 +477,12 @@ def cal_confirm(payload: dict):
     calibration["pending"] = None
 
     count = len(calibration["samples"])
+    print(f"[CAL] Arrow #{count} confirmed: sx={sample.get('sx', 0):.4f}, sy={sample.get('sy', 0):.4f} -> gt=({x_gt:.4f}, {y_gt:.4f})")
     response = {"ok": True, "count": count}
 
     # Auto-compute and apply fit when we have enough samples
     if count >= 6:
+        print(f"[CAL] Recomputing fit with {count} samples...")
         fit_result, err = _compute_fit_internal(calibration["samples"])
         if fit_result:
             calibration["fit"] = fit_result
