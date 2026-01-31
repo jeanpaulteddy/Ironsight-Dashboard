@@ -34,6 +34,7 @@ calibration = {
 
 CAL_FIT_PATH = os.path.join(os.path.dirname(__file__), "calibration_fit.json")
 calibration_fit = None  # active fit used by UDP->XY mapping
+calibration_fit_version = 0  # increments each time a new fit is applied
 
 app.add_middleware(
     CORSMiddleware,
@@ -264,10 +265,12 @@ def _compute_fit_internal(samples: list) -> tuple[dict | None, str | None]:
     }
 
     # Apply fit immediately so next arrow uses it
+    global calibration_fit_version
+    calibration_fit_version += 1
     calibration_fit = {"model": "poly2_sxsy", "params": params}
 
     print("=" * 60)
-    print(f"[CAL] *** NEW FIT COMPUTED & APPLIED ({len(err)} samples) ***")
+    print(f"[CAL] *** NEW FIT v{calibration_fit_version} COMPUTED & APPLIED ({len(err)} samples) ***")
     print(f"[CAL]   Mean error: {mean_cm:.2f} cm")
     print(f"[CAL]   Max error:  {max_cm:.2f} cm")
     print(f"[CAL]   X coeffs: {[f'{v:.6f}' for v in px.tolist()]}")
@@ -491,6 +494,8 @@ def cal_confirm(payload: dict):
                 "max_error_cm": fit_result["max_error_cm"],
                 "n": fit_result["n"],
             }
+            response["fit_version"] = calibration_fit_version
+            response["fit_applied"] = True
 
     return response
 

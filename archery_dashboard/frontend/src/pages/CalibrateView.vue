@@ -24,7 +24,15 @@
         </div>
       </div>
       <div v-else-if="fit" class="statsLive">
-        <div class="statsTitle">Live Accuracy</div>
+        <div class="statsHeader">
+          <div class="statsTitle">Live Accuracy</div>
+          <div class="fitVersionBadge" :class="{ flash: fitJustApplied }">
+            FIT v{{ fitVersion }} ACTIVE
+          </div>
+        </div>
+        <div v-if="fitJustApplied" class="fitAppliedBanner">
+          NEW FIT APPLIED - Next arrow will use updated calibration
+        </div>
         <div class="statsGrid">
           <div class="statItem">
             <span class="statLabel">Mean Error</span>
@@ -140,6 +148,8 @@ const paused = ref(false)
 const fit = ref(null)
 const fitErr = ref(null)
 const showResults = ref(false)
+const fitVersion = ref(0)
+const fitJustApplied = ref(false)
 
 // Calculate accuracy percentage from error
 const accuracyPct = computed(() => {
@@ -215,6 +225,8 @@ async function startCal() {
   fit.value = null
   fitErr.value = null
   showResults.value = false
+  fitVersion.value = 0
+  fitJustApplied.value = false
 }
 
 async function resumeSet() {
@@ -310,6 +322,14 @@ function onTargetClick(ev) {
       // Update live fit stats if available (auto-computed when >= 6 samples)
       if (j.fit) {
         fit.value = j.fit
+        if (j.fit_version) {
+          fitVersion.value = j.fit_version
+        }
+        if (j.fit_applied) {
+          // Flash the indicator to show new fit was applied
+          fitJustApplied.value = true
+          setTimeout(() => { fitJustApplied.value = false }, 1500)
+        }
       }
 
       inSet.value += 1
@@ -435,10 +455,13 @@ onMounted(async () => {
 .statsTitle {
   font-weight: 900;
   font-size: 14px;
-  margin-bottom: 10px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   opacity: 0.85;
+}
+
+.statsWaiting .statsTitle {
+  margin-bottom: 10px;
 }
 
 .statsWaiting .statsHint {
@@ -504,6 +527,54 @@ onMounted(async () => {
 .qualityHint.poor { color: rgba(255, 90, 90, 0.95); background: rgba(255, 90, 90, 0.1); }
 
 .fitErr { color: rgba(255,120,120,0.95); font-weight: 800; }
+
+.statsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.fitVersionBadge {
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 800;
+  background: rgba(60, 220, 120, 0.15);
+  border: 1px solid rgba(60, 220, 120, 0.4);
+  color: rgba(60, 220, 120, 1);
+  transition: all 0.3s ease;
+}
+
+.fitVersionBadge.flash {
+  background: rgba(60, 220, 120, 0.4);
+  border-color: rgba(60, 220, 120, 0.8);
+  box-shadow: 0 0 12px rgba(60, 220, 120, 0.5);
+  animation: pulse 0.5s ease-in-out 3;
+}
+
+@keyframes pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+}
+
+.fitAppliedBanner {
+  background: rgba(60, 220, 120, 0.2);
+  border: 1px solid rgba(60, 220, 120, 0.5);
+  color: rgba(60, 220, 120, 1);
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-weight: 800;
+  font-size: 13px;
+  margin-bottom: 12px;
+  text-align: center;
+  animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 
 .btnApply {
   background: rgba(60, 220, 120, 0.15);
