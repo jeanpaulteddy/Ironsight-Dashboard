@@ -11,6 +11,7 @@
           <div class="session-score">
             Score: {{ currentSession.total_score }}
           </div>
+          <button class="btn btn-danger btn-sm" @click="endSession">End Session</button>
         </div>
         <div v-else class="no-session-warning">
           <span>⚠️ No active session - shots will not be saved</span>
@@ -178,6 +179,28 @@ async function startSession(config) {
     }
   } catch (error) {
     console.error('Failed to start session:', error)
+  }
+}
+
+async function endSession() {
+  if (!confirm('Are you sure you want to end this session? This will save the current progress.')) {
+    return
+  }
+
+  try {
+    const response = await fetch(`${API}/api/session/end`, {
+      method: 'POST'
+    })
+    const data = await response.json()
+
+    if (data.ok) {
+      currentSession.value = null
+      if (confirm('Session ended and saved. View session details?')) {
+        window.location.href = '/sessions'
+      }
+    }
+  } catch (error) {
+    console.error('Failed to end session:', error)
   }
 }
 
@@ -467,6 +490,15 @@ onMounted(async () => {
 
 .btn-primary:hover {
   background: #1a5cd7;
+}
+
+.btn-danger {
+  background: #da3633;
+  color: white;
+}
+
+.btn-danger:hover {
+  background: #c93229;
 }
 
 .btn-sm {
