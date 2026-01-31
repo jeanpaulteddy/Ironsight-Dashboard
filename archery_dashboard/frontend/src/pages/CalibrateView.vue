@@ -122,7 +122,7 @@ const fit = ref(null)
 const fitErr = ref(null)
 const showResults = ref(false)
 
-const totalTarget = 20
+const totalTarget = 30
 const done = computed(() => sampleCount.value >= totalTarget)
 
 // Calculate accuracy percentage from error
