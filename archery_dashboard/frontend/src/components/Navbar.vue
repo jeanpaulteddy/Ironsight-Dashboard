@@ -30,6 +30,7 @@
   position: sticky;
   top: 0;
   z-index: 100;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
 }
 
 .nav-brand {
