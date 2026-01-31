@@ -211,6 +211,71 @@ def _save_fit_to_disk(fit: dict):
         json.dump(fit, f)
     os.replace(tmp, CAL_FIT_PATH)
 
+def _compute_fit_internal(samples: list) -> tuple[dict | None, str | None]:
+    """
+    Compute calibration fit from samples.
+    Returns (fit_dict, None) on success, or (None, error_string) on failure.
+    Also sets calibration_fit global to apply immediately.
+    """
+    global calibration_fit
+
+    if len(samples) < 6:
+        return None, f"need at least 6 samples (have {len(samples)})"
+
+    # Build least-squares system
+    A = []
+    bx = []
+    by = []
+    for s in samples:
+        sx = s.get("sx")
+        sy = s.get("sy")
+        x_gt = s.get("x_gt")
+        y_gt = s.get("y_gt")
+        if sx is None or sy is None or x_gt is None or y_gt is None:
+            continue
+        sx = float(sx); sy = float(sy)
+        A.append([sx, sy, sx*sy, sx*sx, sy*sy, 1.0])
+        bx.append(float(x_gt))
+        by.append(float(y_gt))
+
+    if len(A) < 6:
+        return None, f"not enough valid samples (have {len(A)})"
+
+    A = np.array(A, dtype=np.float64)
+    bx = np.array(bx, dtype=np.float64)
+    by = np.array(by, dtype=np.float64)
+
+    # Solve A * px ~= bx, A * py ~= by
+    px, *_ = np.linalg.lstsq(A, bx, rcond=None)
+    py, *_ = np.linalg.lstsq(A, by, rcond=None)
+
+    # Compute errors
+    x_hat = A @ px
+    y_hat = A @ py
+    err = np.sqrt((x_hat - bx) ** 2 + (y_hat - by) ** 2)
+
+    mean_cm = float(err.mean() * 100.0)
+    max_cm = float(err.max() * 100.0)
+
+    params = {
+        "order": ["sx", "sy", "sx_sy", "sx2", "sy2", "1"],
+        "x": [float(v) for v in px.tolist()],
+        "y": [float(v) for v in py.tolist()],
+    }
+
+    # Apply fit immediately so next arrow uses it
+    calibration_fit = {"model": "poly2_sxsy", "params": params}
+
+    fit_result = {
+        "model": "poly2_sxsy",
+        "params": params,
+        "mean_error_cm": mean_cm,
+        "max_error_cm": max_cm,
+        "n": int(len(err)),
+    }
+
+    return fit_result, None
+
 @app.get("/api/state")
 def get_state():
     return state.to_payload()
@@ -402,68 +467,33 @@ def cal_confirm(payload: dict):
     sample = {**calibration["pending"], "x_gt": x_gt, "y_gt": y_gt}
     calibration["samples"].append(sample)
     calibration["pending"] = None
-    return {"ok": True, "count": len(calibration["samples"])}
+
+    count = len(calibration["samples"])
+    response = {"ok": True, "count": count}
+
+    # Auto-compute and apply fit when we have enough samples
+    if count >= 6:
+        fit_result, err = _compute_fit_internal(calibration["samples"])
+        if fit_result:
+            calibration["fit"] = fit_result
+            response["fit"] = {
+                "mean_error_cm": fit_result["mean_error_cm"],
+                "max_error_cm": fit_result["max_error_cm"],
+                "n": fit_result["n"],
+            }
+
+    return response
 
 @app.post("/api/calibration/compute")
 def cal_compute():
     samples = calibration.get("samples", [])
-    if len(samples) < 6:
-        return {"ok": False, "error": "need at least 6 samples", "count": len(samples)}
+    fit_result, err = _compute_fit_internal(samples)
 
-    # Build least-squares system
-    # rows: [sx, sy, 1] -> x_gt and y_gt
-    A = []
-    bx = []
-    by = []
-    for s in samples:
-        sx = s.get("sx")
-        sy = s.get("sy")
-        x_gt = s.get("x_gt")
-        y_gt = s.get("y_gt")
-        if sx is None or sy is None or x_gt is None or y_gt is None:
-            continue
-        sx = float(sx); sy = float(sy)
-        A.append([sx, sy, sx*sy, sx*sx, sy*sy, 1.0])
-        bx.append(float(x_gt))
-        by.append(float(y_gt))
+    if err:
+        return {"ok": False, "error": err, "count": len(samples)}
 
-    if len(A) < 6:
-        return {"ok": False, "error": "not enough valid samples", "count": len(A)}
-
-    A = np.array(A, dtype=np.float64)
-    bx = np.array(bx, dtype=np.float64)
-    by = np.array(by, dtype=np.float64)
-
-    # Solve A * px ~= bx, A * py ~= by
-    px, *_ = np.linalg.lstsq(A, bx, rcond=None)  # [a,b,c]
-    py, *_ = np.linalg.lstsq(A, by, rcond=None)  # [d,e,f]
-
-    # Compute errors
-    x_hat = A @ px
-    y_hat = A @ py
-    err = np.sqrt((x_hat - bx) ** 2 + (y_hat - by) ** 2)
-
-    mean_cm = float(err.mean() * 100.0)
-    max_cm = float(err.max() * 100.0)
-
-    params = {
-    "order": ["sx", "sy", "sx_sy", "sx2", "sy2", "1"],
-    "x": [float(v) for v in px.tolist()],
-    "y": [float(v) for v in py.tolist()],
-    }
-
-    global calibration_fit
-    calibration_fit = {"model": "poly2_sxsy", "params": params}
-
-    calibration["fit"] = {
-        "model": "poly2_sxsy",
-        "params": params,
-        "mean_error_cm": mean_cm,
-        "max_error_cm": max_cm,
-        "n": int(len(err)),
-    }
-
-    return {"ok": True, **calibration["fit"]}
+    calibration["fit"] = fit_result
+    return {"ok": True, **fit_result}
 
 @app.get("/api/calibration/fit")
 def cal_fit():

@@ -6,22 +6,41 @@
     </header>
 
     <div class="hud">
-      <div class="pill">Samples: {{ sampleCount }}/{{ totalTarget }}</div>
+      <div class="pill">Samples: {{ sampleCount }}</div>
       <div class="pill" :class="pending ? 'warn' : ''">
-        {{ done ? "Calibration complete ✅" : (pending ? "Shot detected → click the real hit" : "Waiting for shot…") }}
+        {{ pending ? "Shot detected → click the real hit" : "Waiting for shot…" }}
       </div>
       <button class="btn" @click="startCal">Restart calibration</button>
-      <button v-if="done" class="btn" @click="computeCal">Compute calibration</button>
+      <button v-if="fit" class="btn btnApply" @click="showResultsOverlay">Review & Apply</button>
     </div>
 
-    <div v-if="fit || fitErr" class="fitBox">
-        <div v-if="fitErr" class="fitErr">Compute error: {{ fitErr }}</div>
-        <div v-else class="fitOk">
-            <div class="fitTitle">Fit results</div>
-            <div class="fitRow">Mean error: <b>{{ fit.mean_error_cm.toFixed(2) }} cm</b></div>
-            <div class="fitRow">Max error: <b>{{ fit.max_error_cm.toFixed(2) }} cm</b></div>
-            <div class="fitRow">Samples used: <b>{{ fit.n }}</b></div>
+    <div class="liveStatsBox">
+      <div v-if="fitErr" class="fitErr">Error: {{ fitErr }}</div>
+      <div v-else-if="sampleCount < 6" class="statsWaiting">
+        <div class="statsTitle">Calibration Progress</div>
+        <div class="statsHint">Need {{ 6 - sampleCount }} more sample{{ 6 - sampleCount === 1 ? '' : 's' }} to start computing accuracy</div>
+        <div class="progressBar">
+          <div class="progressFill" :style="{ width: (sampleCount / 6 * 100) + '%' }"></div>
         </div>
+      </div>
+      <div v-else-if="fit" class="statsLive">
+        <div class="statsTitle">Live Accuracy</div>
+        <div class="statsGrid">
+          <div class="statItem">
+            <span class="statLabel">Mean Error</span>
+            <span class="statValue" :class="errorClass(fit.mean_error_cm)">{{ fit.mean_error_cm.toFixed(2) }} cm</span>
+          </div>
+          <div class="statItem">
+            <span class="statLabel">Max Error</span>
+            <span class="statValue" :class="errorClass(fit.max_error_cm)">{{ fit.max_error_cm.toFixed(2) }} cm</span>
+          </div>
+          <div class="statItem">
+            <span class="statLabel">Samples</span>
+            <span class="statValue">{{ fit.n }}</span>
+          </div>
+        </div>
+        <div class="qualityHint" :class="qualityClass">{{ qualityMessage }}</div>
+      </div>
     </div>
 
     <div v-if="paused" class="pauseOverlay">
@@ -122,18 +141,44 @@ const fit = ref(null)
 const fitErr = ref(null)
 const showResults = ref(false)
 
-const totalTarget = 30
-const done = computed(() => sampleCount.value >= totalTarget)
-
 // Calculate accuracy percentage from error
 const accuracyPct = computed(() => {
   if (!fit.value || !fit.value.mean_error_cm) return 0
-  // Assume ring 1 radius is ~20cm (200mm), so perfect accuracy at center
-  // Mean error of 2cm = 90% accuracy, 1cm = 95%, 0.5cm = 97.5%
   const maxErrorForCalc = 10 // cm - beyond this is 0%
   const pct = Math.max(0, 100 - (fit.value.mean_error_cm / maxErrorForCalc * 100))
   return Math.min(100, pct)
 })
+
+// Quality message based on mean error
+const qualityMessage = computed(() => {
+  if (!fit.value) return ""
+  const mean = fit.value.mean_error_cm
+  if (mean < 1.5) return "Excellent accuracy - ready to apply!"
+  if (mean < 3) return "Good accuracy - can apply or keep improving"
+  if (mean < 5) return "Acceptable - more samples may help"
+  return "Keep shooting for better accuracy"
+})
+
+const qualityClass = computed(() => {
+  if (!fit.value) return ""
+  const mean = fit.value.mean_error_cm
+  if (mean < 1.5) return "excellent"
+  if (mean < 3) return "good"
+  if (mean < 5) return "acceptable"
+  return "poor"
+})
+
+function errorClass(cm) {
+  if (cm < 2) return "good"
+  if (cm < 5) return "warn"
+  return "bad"
+}
+
+function showResultsOverlay() {
+  if (fit.value) {
+    showResults.value = true
+  }
+}
 
 // show a faint dot for the detected (uncalibrated) location so you can compare
 const pendingDot = ref([])
@@ -167,6 +212,9 @@ async function startCal() {
   sampleCount.value = 0
   inSet.value = 0
   paused.value = false
+  fit.value = null
+  fitErr.value = null
+  showResults.value = false
 }
 
 async function resumeSet() {
@@ -175,27 +223,6 @@ async function resumeSet() {
     inSet.value = 0
     pending.value = null
     pendingDot.value = []
-}
-
-async function computeCal() {
-  fitErr.value = null
-  fit.value = null
-
-  try {
-    // 1) compute only (don't apply yet)
-    const r1 = await fetch(`${API}/api/calibration/compute`, { method: "POST" })
-    const j1 = await r1.json()
-    if (!j1.ok) {
-      fitErr.value = j1.error || "compute failed"
-      return
-    }
-    fit.value = j1
-
-    // 2) show results overlay
-    showResults.value = true
-  } catch (e) {
-    fitErr.value = String(e)
-  }
 }
 
 async function applyAndGo() {
@@ -221,7 +248,6 @@ async function restartFromResults() {
 }
 
 function onTargetClick(ev) {
-  if (done.value) return
   if (paused.value) return
   if (!pending.value) return
 
@@ -281,6 +307,11 @@ function onTargetClick(ev) {
       pending.value = null
       pendingDot.value = []
 
+      // Update live fit stats if available (auto-computed when >= 6 samples)
+      if (j.fit) {
+        fit.value = j.fit
+      }
+
       inSet.value += 1
       if (inSet.value >= perSet) {
         paused.value = true
@@ -302,7 +333,6 @@ onMounted(async () => {
     const msg = JSON.parse(ev.data)
 
     if (msg.type === "cal_pending") {
-      if (done.value) return
       if (paused.value) return
       pending.value = msg.pending
       sampleCount.value = msg.count ?? sampleCount.value
@@ -393,16 +423,93 @@ onMounted(async () => {
 .pauseTitle{ font-size: 18px; font-weight: 900; margin-bottom: 6px; }
 .pauseText{ opacity: 0.85; margin-bottom: 12px; }
 
-.fitBox{
+/* Live stats panel */
+.liveStatsBox {
   margin: 10px 0 14px;
-  padding: 10px 12px;
+  padding: 14px 16px;
   border-radius: 14px;
   border: 1px solid rgba(255,255,255,0.12);
   background: rgba(255,255,255,0.05);
 }
-.fitTitle{ font-weight: 900; margin-bottom: 6px; }
-.fitRow{ font-size: 13px; opacity: 0.9; margin: 2px 0; }
-.fitErr{ color: rgba(255,120,120,0.95); font-weight: 800; }
+
+.statsTitle {
+  font-weight: 900;
+  font-size: 14px;
+  margin-bottom: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  opacity: 0.85;
+}
+
+.statsWaiting .statsHint {
+  font-size: 13px;
+  opacity: 0.75;
+  margin-bottom: 10px;
+}
+
+.progressBar {
+  height: 6px;
+  background: rgba(255,255,255,0.1);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  background: rgba(100, 180, 255, 0.7);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.statsLive .statsGrid {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.statItem {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.statLabel {
+  font-size: 11px;
+  opacity: 0.6;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.statValue {
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.statValue.good { color: rgba(60, 220, 120, 0.95); }
+.statValue.warn { color: rgba(255, 200, 60, 0.95); }
+.statValue.bad { color: rgba(255, 90, 90, 0.95); }
+
+.qualityHint {
+  font-size: 13px;
+  font-weight: 700;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.06);
+}
+
+.qualityHint.excellent { color: rgba(60, 220, 120, 0.95); background: rgba(60, 220, 120, 0.1); }
+.qualityHint.good { color: rgba(100, 200, 255, 0.95); background: rgba(100, 200, 255, 0.1); }
+.qualityHint.acceptable { color: rgba(255, 200, 60, 0.95); background: rgba(255, 200, 60, 0.1); }
+.qualityHint.poor { color: rgba(255, 90, 90, 0.95); background: rgba(255, 90, 90, 0.1); }
+
+.fitErr { color: rgba(255,120,120,0.95); font-weight: 800; }
+
+.btnApply {
+  background: rgba(60, 220, 120, 0.15);
+  border: 1px solid rgba(60, 220, 120, 0.4);
+  color: rgba(60, 220, 120, 1);
+}
 
 /* Results overlay */
 .resultsCard {
