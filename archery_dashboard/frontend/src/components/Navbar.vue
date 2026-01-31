@@ -33,10 +33,9 @@
 }
 
 .nav-brand {
-  font-size: 1.25rem;
-  font-weight: 600;
+  font-size: 20px;
+  font-weight: 700;
   color: #e7ecf5;
-  letter-spacing: 0.02em;
 }
 
 .nav-links {

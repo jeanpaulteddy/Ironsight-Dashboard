@@ -2,7 +2,6 @@
   <div class="page">
     <header class="topbar">
       <div class="header-row">
-        <div class="title">IronSight Dashboard</div>
         <div class="session-info" v-if="currentSession">
           <div class="session-progress">
             <span class="session-label">Session Progress:</span>
