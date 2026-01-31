@@ -172,6 +172,7 @@ onMounted(() => {
   background: #0b0f17;
   min-height: 100vh;
   color: #e7ecf5;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
 }
 
 .page-header {
