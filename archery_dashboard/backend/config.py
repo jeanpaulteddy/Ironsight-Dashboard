@@ -24,3 +24,9 @@ MAX_ENDS = 10
 DATABASE_PATH = "data/archery.db"
 SCREENSHOTS_DIR = "data/screenshots"
 STREAM_URL = "http://localhost:8081/stream"
+
+# Camera settings (for integrated PiCamera2/IMX500)
+CAMERA_ENABLED = True  # Set to False to disable camera (e.g., for development)
+CAMERA_MODEL_PATH = "/usr/share/imx500-models/imx500_network_higherhrnet_coco.rpk"
+CAMERA_DETECTION_THRESHOLD = 0.3
+CAMERA_MJPEG_PORT = 8081

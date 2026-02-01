@@ -3,6 +3,55 @@ import aiohttp
 import os
 import config
 
+# Try to import camera module for direct frame access
+try:
+    import camera
+    _camera_available = True
+except ImportError:
+    _camera_available = False
+
+
+def capture_screenshot_direct(output_path: str) -> bool:
+    """
+    Capture a screenshot directly from the camera module (no HTTP).
+
+    Args:
+        output_path: Relative path where to save the JPEG (e.g., "session_1/shot_1.jpg")
+
+    Returns:
+        True if successful, False otherwise
+    """
+    if not _camera_available:
+        print("[SCREENSHOT] Camera module not available")
+        return False
+
+    frame = camera.get_latest_frame()
+    if frame is None:
+        print("[SCREENSHOT] No frame available from camera")
+        return False
+
+    try:
+        # Construct full path
+        screenshots_dir = os.path.join(os.path.dirname(__file__), config.SCREENSHOTS_DIR)
+        full_path = os.path.join(screenshots_dir, output_path)
+
+        # Create directory if needed
+        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+
+        # Save frame
+        with open(full_path, 'wb') as f:
+            f.write(frame)
+
+        print(f"[SCREENSHOT] Saved screenshot to {output_path} ({len(frame)} bytes)")
+        return True
+    except IOError as e:
+        print(f"[SCREENSHOT] File I/O error: {e}")
+        return False
+    except Exception as e:
+        print(f"[SCREENSHOT] Unexpected error: {e}")
+        return False
+
+
 async def capture_screenshot(stream_url: str, output_path: str) -> bool:
     """
     Capture a single JPEG frame from an MJPEG stream.
@@ -88,14 +137,19 @@ async def capture_screenshot(stream_url: str, output_path: str) -> bool:
 
 async def capture_screenshot_simple(stream_url: str, output_path: str) -> bool:
     """
-    Simplified screenshot capture - tries to get a snapshot endpoint first,
-    falls back to MJPEG parsing if needed.
-
-    This function first tries appending /snapshot to the stream URL,
-    which many MJPEG servers provide for single-frame capture.
+    Simplified screenshot capture - tries multiple methods:
+    1. Direct frame access from camera module (fastest, most reliable)
+    2. Snapshot HTTP endpoint
+    3. MJPEG stream parsing (fallback)
     """
-    # Try snapshot endpoint first (if available)
-    snapshot_url = stream_url.rstrip('/') + '/snapshot' if '/stream' in stream_url else stream_url
+    # Method 1: Try direct frame access first (no network overhead)
+    if _camera_available:
+        if capture_screenshot_direct(output_path):
+            return True
+        print("[SCREENSHOT] Direct capture failed, trying HTTP fallback")
+
+    # Method 2: Try snapshot endpoint
+    snapshot_url = stream_url.replace('/stream', '/snapshot') if '/stream' in stream_url else stream_url + '/snapshot'
 
     try:
         timeout = aiohttp.ClientTimeout(total=3)

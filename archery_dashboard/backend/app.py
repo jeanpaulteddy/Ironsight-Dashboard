@@ -5,9 +5,26 @@ from typing import Set, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect # type: ignore
 from fastapi.middleware.cors import CORSMiddleware # type: ignore
 from fastapi.staticfiles import StaticFiles # type: ignore
-from pose_udp_listener import start_pose_udp_listener, get_latest_pose
+from pose_udp_listener import start_pose_udp_listener, get_latest_pose as get_latest_pose_udp
 import numpy as np # type: ignore
 import config
+
+# Import camera module (optional - gracefully handle if not available)
+try:
+    import camera
+    _camera_available = True
+except ImportError:
+    _camera_available = False
+    print("[APP] Camera module not available - running without camera")
+
+
+def get_latest_pose():
+    """Get latest pose from camera module, fallback to UDP listener."""
+    if _camera_available:
+        pose = camera.get_latest_pose()
+        if pose is not None:
+            return pose
+    return get_latest_pose_udp()
 from scoring import score_from_r
 from state import SessionState, Shot
 from udp_listener import udp_loop
@@ -73,16 +90,33 @@ class ModeIn(BaseModel):
     mode: str
 
 async def _pose_broadcaster():
+    last_pose_ts = 0
     while True:
-        msg = await _pose_queue.get()
-        dead = []
-        for ws in list(_pose_clients):
-            try:
-                await ws.send_json(msg)
-            except Exception:
-                dead.append(ws)
-        for ws in dead:
-            _pose_clients.discard(ws)
+        # If camera module is available, poll for new poses
+        if _camera_available:
+            pose = camera.get_latest_pose()
+            if pose and pose.get("ts", 0) > last_pose_ts:
+                last_pose_ts = pose.get("ts", 0)
+                dead = []
+                for ws in list(_pose_clients):
+                    try:
+                        await ws.send_json(pose)
+                    except Exception:
+                        dead.append(ws)
+                for ws in dead:
+                    _pose_clients.discard(ws)
+            await asyncio.sleep(0.05)  # Poll at ~20Hz
+        else:
+            # UDP mode: wait for messages from queue
+            msg = await _pose_queue.get()
+            dead = []
+            for ws in list(_pose_clients):
+                try:
+                    await ws.send_json(msg)
+                except Exception:
+                    dead.append(ws)
+            for ws in dead:
+                _pose_clients.discard(ws)
 
 # Channel mapping (same default you used)
 CH2COMP = {"0": "N", "1": "W", "2": "S", "3": "E"}
@@ -91,6 +125,16 @@ CH2COMP = {"0": "N", "1": "W", "2": "S", "3": "E"}
 async def startup():
     # Initialize database
     await database.init_db()
+
+    # Start camera (if available and enabled)
+    camera_enabled = getattr(config, 'CAMERA_ENABLED', True)
+    if _camera_available and camera_enabled:
+        print("[APP] Starting camera...")
+        camera.start_camera()
+    elif not camera_enabled:
+        print("[APP] Camera disabled in config - screenshots will use HTTP fallback")
+    else:
+        print("[APP] Camera not available - screenshots will use HTTP fallback")
 
     # start UDP loop and broadcast loop
     global calibration_fit
@@ -111,7 +155,14 @@ async def _startup_pose_listener():
         # thread-safe handoff from UDP thread -> asyncio loop
         loop.call_soon_threadsafe(_pose_queue.put_nowait, msg)
 
-    start_pose_udp_listener(host="0.0.0.0", port=5015, on_pose=on_pose)
+    # Only start UDP listener if camera module not available
+    # (camera module provides pose data directly)
+    if not _camera_available:
+        print("[APP] Starting UDP pose listener (camera not available)")
+        start_pose_udp_listener(host="0.0.0.0", port=5015, on_pose=on_pose)
+    else:
+        print("[APP] Using camera module for pose data")
+
     asyncio.create_task(_pose_broadcaster())
 
 async def dispatch_loop():
