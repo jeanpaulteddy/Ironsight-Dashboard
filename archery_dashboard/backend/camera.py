@@ -9,8 +9,8 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Optional, Dict, Any
 
-import numpy as np
-import cv2
+import numpy as np # type: ignore
+import cv2 # type: ignore
 import config
 
 # Thread-safe storage for latest frame and pose
