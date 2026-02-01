@@ -266,10 +266,10 @@ def start_camera(
 
     # Try to import PiCamera2 dependencies
     try:
-        from picamera2 import CompletedRequest, MappedArray, Picamera2
-        from picamera2.devices.imx500 import IMX500, NetworkIntrinsics
-        from picamera2.devices.imx500.postprocess import COCODrawer
-        from picamera2.devices.imx500.postprocess_highernet import postprocess_higherhrnet
+        from picamera2 import CompletedRequest, MappedArray, Picamera2 # pyright: ignore[reportMissingImports]
+        from picamera2.devices.imx500 import IMX500, NetworkIntrinsics # pyright: ignore[reportMissingImports]
+        from picamera2.devices.imx500.postprocess import COCODrawer # pyright: ignore[reportMissingImports]
+        from picamera2.devices.imx500.postprocess_highernet import postprocess_higherhrnet # pyright: ignore[reportMissingImports]
     except ImportError as e:
         _camera_error = f"PiCamera2 not available: {e}"
         print(f"[CAMERA] {_camera_error}")
