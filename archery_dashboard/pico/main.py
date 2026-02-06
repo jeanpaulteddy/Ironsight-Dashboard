@@ -30,7 +30,7 @@ CONSEC_REQUIRED  = 1
 I2C_BUS_ID   = 0
 I2C_SDA_PIN  = 0
 I2C_SCL_PIN  = 1
-I2C_FREQ     = 400_000  # Increased from 50kHz to 400kHz for faster sampling
+I2C_FREQ     = 150_000  # 150kHz (long cables limit max speed, was 50kHz)
 
 TCA_ADDR     = 0x70
 ADXL_ADDRS   = [0x53, 0x1D]
