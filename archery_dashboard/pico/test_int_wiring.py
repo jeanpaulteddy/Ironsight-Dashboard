@@ -2,10 +2,10 @@
 # TDOA interrupt wiring verification for archery target
 #
 # Expected wiring:
-#   ADXL345 #0 (ch0, North) INT1 -> Pico GP2
-#   ADXL345 #1 (ch1, West)  INT1 -> Pico GP3
-#   ADXL345 #2 (ch2, South) INT1 -> Pico GP4
-#   ADXL345 #3 (ch3, East)  INT1 -> Pico GP5
+#   ADXL345 #0 (ch0, North) INT1 -> Pico GP5
+#   ADXL345 #1 (ch1, West)  INT1 -> Pico GP4
+#   ADXL345 #2 (ch2, South) INT1 -> Pico GP3
+#   ADXL345 #3 (ch3, East)  INT1 -> Pico GP2
 #
 # Test procedure:
 # 1. Upload and run this script
@@ -47,12 +47,11 @@ EVENT_WINDOW_MS = 20
 EVENT_COOLDOWN_MS = 200
 
 # GPIO pins for INT1 from each sensor
-# Note: West/South INT1 wires are physically swapped (GP3↔GP4)
 INT_PINS = {
-    0: 2,  # Channel 0 (North) -> GP2
-    1: 4,  # Channel 1 (West)  -> GP4 (swapped)
-    2: 3,  # Channel 2 (South) -> GP3 (swapped)
-    3: 5,  # Channel 3 (East)  -> GP5
+    0: 5,  # Channel 0 (North) -> GP5
+    1: 4,  # Channel 1 (West)  -> GP4
+    2: 3,  # Channel 2 (South) -> GP3
+    3: 2,  # Channel 3 (East)  -> GP2
 }
 
 CH_NAMES = {0: "North", 1: "West", 2: "South", 3: "East"}

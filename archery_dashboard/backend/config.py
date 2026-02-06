@@ -2,19 +2,19 @@
 UDP_HOST = "0.0.0.0"
 UDP_PORT = 5005
 
-# Placeholder ring radii in meters (we will tune later)
-RINGS_M = {
-    "X": 0.010,
-    10: 0.020,
-    9: 0.040,
-    8: 0.060,
-    7: 0.080,
-    6: 0.100,
-    5: 0.120,
-    4: 0.140,
-    3: 0.160,
-    2: 0.180,
-    1: 0.200,
+# Ring radii in centimeters (matching real target face)
+RINGS_CM = {
+    "X": 2,
+    10: 4,
+    9: 8,
+    8: 12,
+    7: 16,
+    6: 20,
+    5: 24,
+    4: 28,
+    3: 32,
+    2: 36,
+    1: 40,
 }
 
 ARROWS_PER_END = 3
@@ -35,6 +35,6 @@ CAMERA_MJPEG_PORT = 8081
 TDOA_ENABLED = True                # Enable TDOA-based localization
 TDOA_WAVE_SPEED = 100.0            # Wave propagation speed in straw target (m/s)
 TDOA_WEIGHT = 0.5                  # Blend weight: 0.0 = pure energy, 1.0 = pure TDOA
-TARGET_DIAMETER_M = 1.26           # Sensor span in meters (2 * 63cm from center)
+TARGET_DIAMETER_CM = 126.0          # Sensor span in cm (2 * 63cm from center)
 HIT_LOG_ENABLED = True             # Enable CSV logging of all arrow hits
 HIT_LOG_DIR = "data/logs"          # Directory for hit logs

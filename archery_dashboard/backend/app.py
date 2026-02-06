@@ -141,7 +141,17 @@ async def startup():
     try:
         with open(CAL_FIT_PATH, "r") as f:
             calibration_fit = json.load(f)
-            print("[CAL] loaded fit from disk:", calibration_fit)
+            # Detect old meter-based fits: if the constant offset (last coeff) is < 1.0
+            # for both axes, it was calibrated in meters — discard it.
+            params = calibration_fit.get("params", {}) if calibration_fit else {}
+            cx = params.get("x", [])
+            cy = params.get("y", [])
+            if cx and cy and abs(cx[-1]) < 1.0 and abs(cy[-1]) < 1.0:
+                print("[CAL] WARNING: old meter-based fit detected (offsets < 1cm) — clearing it. Re-calibrate in cm.")
+                calibration_fit = None
+                os.remove(CAL_FIT_PATH)
+            else:
+                print("[CAL] loaded fit from disk:", calibration_fit)
     except Exception:
         calibration_fit = None
     asyncio.create_task(udp_loop(config.UDP_HOST, config.UDP_PORT, queue, CH2COMP, get_mode, fit_getter=get_fit))
@@ -330,8 +340,8 @@ def _compute_fit_internal(samples: list) -> tuple[dict | None, str | None]:
     y_hat = A @ py
     err = np.sqrt((x_hat - bx) ** 2 + (y_hat - by) ** 2)
 
-    mean_cm = float(err.mean() * 100.0)
-    max_cm = float(err.max() * 100.0)
+    mean_cm = float(err.mean())
+    max_cm = float(err.max())
 
     if use_poly2:
         model_name = "poly2_sxsy"
@@ -416,7 +426,7 @@ async def ws_pose(ws: WebSocket):
 
 @app.get("/api/config")
 def get_config():
-    return {"RINGS_M": config.RINGS_M, "ARROWS_PER_END": config.ARROWS_PER_END, "MAX_ENDS": config.MAX_ENDS}
+    return {"RINGS_CM": config.RINGS_CM, "ARROWS_PER_END": config.ARROWS_PER_END, "MAX_ENDS": config.MAX_ENDS}
 
 @app.post("/api/config/rings")
 async def set_rings(payload: dict):
@@ -427,9 +437,9 @@ async def set_rings(payload: dict):
             new_rings["X"] = float(v)
         else:
             new_rings[int(k)] = float(v)
-    config.RINGS_M.clear()
-    config.RINGS_M.update(new_rings)
-    return {"ok": True, "RINGS_M": config.RINGS_M}
+    config.RINGS_CM.clear()
+    config.RINGS_CM.update(new_rings)
+    return {"ok": True, "RINGS_CM": config.RINGS_CM}
 
 @app.get("/api/shots")
 def get_shots():
@@ -574,7 +584,7 @@ def cal_confirm(payload: dict):
     if log_data:
         session_id = calibration.get("session_id", f"cal_{int(time.time())}")
         log_calibration_confirmation(log_data, x_gt, y_gt, session_id=session_id)
-        print(f"[CAL] Logged to CSV: estimated=({log_data.get('x_m', 0):.4f}, {log_data.get('y_m', 0):.4f}) -> ground_truth=({x_gt:.4f}, {y_gt:.4f})")
+        print(f"[CAL] Logged to CSV: estimated=({log_data.get('x_m', 0):.2f}, {log_data.get('y_m', 0):.2f})cm -> ground_truth=({x_gt:.2f}, {y_gt:.2f})cm")
 
     response = {"ok": True, "count": count}
 

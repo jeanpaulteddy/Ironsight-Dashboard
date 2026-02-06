@@ -208,15 +208,15 @@ const pendingDot = ref([])
 async function loadRings() {
   const cfg = await fetch(`${API}/api/config`).then(r => r.json())
   const out = {}
-  for (const [k, v] of Object.entries(cfg.RINGS_M)) out[String(k)] = v
+  for (const [k, v] of Object.entries(cfg.RINGS_CM)) out[String(k)] = v
   rings.value = out
 }
 
-function outerRadiusM() {
+function outerRadiusCm() {
   // Get ring 1 radius (outermost ring for standard target)
   // Fixed scale - don't expand for outside shots (matches TargetView with disableAutoZoom)
   const ring1 = rings.value?.["1"]
-  return (typeof ring1 === "number") ? ring1 : 0.25
+  return (typeof ring1 === "number") ? ring1 : 25
 }
 
 async function startCal() {
@@ -293,7 +293,7 @@ function onTargetClick(ev) {
   // Calculate SCALE to match TargetView's coordinate system
   // TargetView uses: SCALE = (CX - PAD) / maxR
   // This ensures calibration and display use identical transformations
-  const Rm = outerRadiusM()
+  const Rm = outerRadiusCm()
   const SCALE = radiusCanvas / Rm  // pixels per meter
 
   // Convert canvas pixels directly to meters

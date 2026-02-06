@@ -9,7 +9,7 @@ import { ref, onMounted, watch, computed } from "vue"
 
 const props = defineProps({
   shots: { type: Array, default: () => [] },
-  rings: { type: Object, default: () => ({}) }, // expects { "X":0.01, "1":0.2, ... "10":0.02 } (meters)
+  rings: { type: Object, default: () => ({}) }, // expects { "X":2, "1":40, ... "10":4 } (cm)
   disableAutoZoom: { type: Boolean, default: false } // when true, keep target at fixed scale regardless of shot positions
 })
 
@@ -22,7 +22,7 @@ const PAD = 14 // padding so outer ring fits nicely
 
 const maxR = computed(() => {
   const ring1 = props.rings?.["1"]
-  const base = (typeof ring1 === "number") ? ring1 : 0.25
+  const base = (typeof ring1 === "number") ? ring1 : 25
 
   // When disableAutoZoom is true, don't expand view for outside shots
   if (props.disableAutoZoom) {

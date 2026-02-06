@@ -11,8 +11,8 @@ except Exception:
     default_get_mode = None
 
 # Target geometry: sensors are 63cm from center (N, W, S, E positions)
-D_M = 1.26  # diameter = 2 * 0.63m
-HALF_SPAN = D_M / 2.0  # 0.63m - distance from center to sensor
+D_CM = 126.0  # diameter in cm
+HALF_SPAN = D_CM / 2.0  # 63cm - distance from center to sensor
 
 def extract_compass_peaks(msg: Dict[str, Any], ch2comp: Dict[str, str]) -> Dict[str, float]:
     ch = msg.get("ch", {})
@@ -35,9 +35,9 @@ def features_from_peaks(pN: float, pE: float, pW: float, pS: float):
 # ---------- TDOA LOCALIZATION ----------
 # Wave speed in straw target (m/s) - tune based on actual measurements
 # Observed: ~12000µs max timing diff across 1.3m target → ~100 m/s
-TDOA_WAVE_SPEED = 100.0
+TDOA_WAVE_SPEED = 100.0  # m/s
 TDOA_ENABLED = True
-TARGET_DIAMETER_M = 1.26  # Sensor span = 2 * 63cm
+TARGET_DIAMETER_CM = 126.0  # Sensor span = 2 * 63cm
 
 def tdoa_localize(tdoa_us: Dict[str, int], ch2comp: Dict[str, str], wave_speed: float = TDOA_WAVE_SPEED):
     """
@@ -76,7 +76,7 @@ def tdoa_localize(tdoa_us: Dict[str, int], ch2comp: Dict[str, str], wave_speed: 
 
     # Normalize to [-1, 1] range
     # Max distance difference = target diameter (sensors on opposite edges)
-    max_diff = TARGET_DIAMETER_M
+    max_diff = TARGET_DIAMETER_CM / 100.0  # convert to meters for TDOA physics
     sx = -dx / max_diff  # flip sign for coordinate system
     sy = -dy / max_diff
 
@@ -90,7 +90,7 @@ def tdoa_localize(tdoa_us: Dict[str, int], ch2comp: Dict[str, str], wave_speed: 
     # Expected spread for edge hits: ~13000µs (1.3m / 100m/s)
     # Center hits: smaller spread
     # Confidence based on having reasonable spread (not 0, not impossibly large)
-    expected_max_spread = TARGET_DIAMETER_M / wave_speed * 1e6  # ~13000µs
+    expected_max_spread = (TARGET_DIAMETER_CM / 100.0) / wave_speed * 1e6  # ~13000µs
 
     if spread < 100:  # All sensors fired nearly simultaneously - suspicious
         confidence = 0.2
@@ -304,7 +304,7 @@ def log_calibration_confirmation(evt: Dict[str, Any], x_gt: float, y_gt: float, 
     log_hit(evt_with_gt, mode="calibration", session_id=session_id)
 
 def xy_from_features(sx: float, sy: float, fit):
-    """Map normalized features -> meters. Uses calibration fit when available."""
+    """Map normalized features -> cm. Uses calibration fit when available."""
 
     if isinstance(fit, dict):
         model = fit.get("model")
@@ -755,7 +755,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
         r = math.hypot(x, y)
 
         if getattr(self, "debug_print", False):
-            print(f"[ACCEPT] sx={sx:+.3f}  sy={sy:+.3f}  x={x:+.4f}m  y={y:+.4f}m  r={r:.4f}m")
+            print(f"[ACCEPT] sx={sx:+.3f}  sy={sy:+.3f}  x={x:+.2f}cm  y={y:+.2f}cm  r={r:.2f}cm")
 
         event = {
             "src_ip": addr[0],

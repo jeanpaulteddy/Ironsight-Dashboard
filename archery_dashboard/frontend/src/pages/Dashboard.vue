@@ -218,7 +218,7 @@ onMounted(async () => {
   const cfgRes = await fetch(`${API}/api/config`)
   const cfg = await cfgRes.json()
   const out = {}
-  for (const [k, v] of Object.entries(cfg.RINGS_M)) out[String(k)] = v
+  for (const [k, v] of Object.entries(cfg.RINGS_CM)) out[String(k)] = v
   rings.value = out
 
   const ws = new WebSocket(`ws://${location.hostname}:8000/ws`)
