@@ -47,10 +47,11 @@ EVENT_WINDOW_MS = 20
 EVENT_COOLDOWN_MS = 200
 
 # GPIO pins for INT1 from each sensor
+# Note: West/South INT1 wires are physically swapped (GP3↔GP4)
 INT_PINS = {
     0: 2,  # Channel 0 (North) -> GP2
-    1: 3,  # Channel 1 (West)  -> GP3
-    2: 4,  # Channel 2 (South) -> GP4
+    1: 4,  # Channel 1 (West)  -> GP4 (swapped)
+    2: 3,  # Channel 2 (South) -> GP3 (swapped)
     3: 5,  # Channel 3 (East)  -> GP5
 }
 
