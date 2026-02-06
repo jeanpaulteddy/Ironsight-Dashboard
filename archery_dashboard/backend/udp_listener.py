@@ -697,11 +697,17 @@ class UDPProtocol(asyncio.DatagramProtocol):
             sy_energy = 0.0
 
         # ----------------------
-        # TDOA-based localization (intelligent fusion with energy)
+        # TDOA-based localization (using peak-time interpolation for better accuracy)
         # ----------------------
-        tdoa_us = msg.get("tdoa_us", {})
+        # Prefer peak_tdoa_us (interpolated) over tdoa_us (interrupt-based)
+        tdoa_us = msg.get("peak_tdoa_us", {}) or msg.get("tdoa_us", {})
         sx_tdoa, sy_tdoa, tdoa_conf = None, None, 0.0
         tdoa_comp = {}
+
+        # Log sample counts if available (for debugging waveform capture)
+        sample_count = msg.get("sample_count", {})
+        if getattr(self, "debug_print", False) and sample_count:
+            print(f"[WAVEFORM] samples per channel: {sample_count}")
 
         if TDOA_ENABLED and tdoa_us and len(tdoa_us) >= 4:
             sx_tdoa, sy_tdoa, tdoa_conf = tdoa_localize(tdoa_us, self.ch2comp)
@@ -713,7 +719,8 @@ class UDPProtocol(asyncio.DatagramProtocol):
                     tdoa_comp[c] = dt_us
 
             if getattr(self, "debug_print", False):
-                print(f"[TDOA] N={tdoa_comp.get('N', 0)}us  W={tdoa_comp.get('W', 0)}us  S={tdoa_comp.get('S', 0)}us  E={tdoa_comp.get('E', 0)}us")
+                tdoa_source = "peak" if msg.get("peak_tdoa_us") else "interrupt"
+                print(f"[TDOA-{tdoa_source}] N={tdoa_comp.get('N', 0)}us  W={tdoa_comp.get('W', 0)}us  S={tdoa_comp.get('S', 0)}us  E={tdoa_comp.get('E', 0)}us")
                 if sx_tdoa is not None:
                     print(f"       sx_tdoa={sx_tdoa:+.3f}  sy_tdoa={sy_tdoa:+.3f}  conf={tdoa_conf:.2f}")
 

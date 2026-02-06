@@ -30,7 +30,7 @@ CONSEC_REQUIRED  = 1
 I2C_BUS_ID   = 0
 I2C_SDA_PIN  = 0
 I2C_SCL_PIN  = 1
-I2C_FREQ     = 50000
+I2C_FREQ     = 400_000  # Increased from 50kHz to 400kHz for faster sampling
 
 TCA_ADDR     = 0x70
 ADXL_ADDRS   = [0x53, 0x1D]
@@ -76,6 +76,10 @@ last_debug_ping = 0
 int_timestamps = {}  # {channel: timestamp_us}
 int_pins = {}        # {channel: Pin object}
 tdoa_snapshot = {}   # Snapshot of timestamps at trigger time
+
+# Waveform buffer for peak-time TDOA (full waveform capture)
+waveform = {}        # {channel: [(time_us, magnitude), ...]}
+MAX_WAVEFORM_SAMPLES = 60  # ~120ms at 500Hz
 
 # ---------- I2C AUTO-DISCOVERY ----------
 MUX_ADDRS = [0x70,0x71,0x72,0x73,0x74,0x75,0x76,0x77]
@@ -160,10 +164,9 @@ def _recover_bus_and_retry(func, *args, tries=2, **kwargs):
 
 def select_mux_channel(ch):
     def _do():
-        i2c.writeto(TCA_ADDR, b"\x00")
-        time.sleep_ms(1)
+        # Simplified: direct channel select without deselect step
+        # At 400kHz I2C, no delays needed - mux switches in <1µs
         i2c.writeto(TCA_ADDR, bytes([1<<ch]))
-        time.sleep_ms(1)
     try:
         _do()
     except Exception:
@@ -304,6 +307,62 @@ def send_bundle(b):
     except Exception as e:
         print("send error:", e)
 
+# ---------- PEAK TIME INTERPOLATION ----------
+def find_peak_time_interpolated(samples):
+    """
+    Find peak time with sub-sample accuracy using parabolic interpolation.
+    samples: list of (time_us, magnitude) tuples
+    Returns: interpolated peak time in microseconds
+    """
+    if len(samples) < 3:
+        # Not enough for interpolation, return raw peak
+        if not samples:
+            return 0
+        peak_idx = 0
+        peak_val = samples[0][1]
+        for i in range(1, len(samples)):
+            if samples[i][1] > peak_val:
+                peak_val = samples[i][1]
+                peak_idx = i
+        return samples[peak_idx][0]
+
+    # Find peak index
+    peak_idx = 0
+    peak_val = samples[0][1]
+    for i in range(1, len(samples)):
+        if samples[i][1] > peak_val:
+            peak_val = samples[i][1]
+            peak_idx = i
+
+    # Need neighbors for interpolation
+    if peak_idx == 0 or peak_idx == len(samples) - 1:
+        return samples[peak_idx][0]
+
+    # Get three points around peak
+    t0, y0 = samples[peak_idx - 1]
+    t1, y1 = samples[peak_idx]
+    t2, y2 = samples[peak_idx + 1]
+
+    # Parabolic interpolation: find vertex of parabola through 3 points
+    dt = (t2 - t0) / 2.0  # Average sample interval
+
+    # Parabola vertex offset from center point
+    denom = 2.0 * (y0 - 2.0*y1 + y2)
+    if abs(denom) < 0.001:
+        return t1  # Flat peak, return center
+
+    offset = (y0 - y2) / denom  # Offset in sample units (-0.5 to +0.5)
+
+    # Clamp offset to reasonable range
+    if offset > 0.5:
+        offset = 0.5
+    elif offset < -0.5:
+        offset = -0.5
+
+    # Convert to microseconds
+    peak_time = t1 + int(offset * dt)
+    return peak_time
+
 # ---------- PACKETS ----------
 def build_bundle(now):
     chs = {}
@@ -319,22 +378,43 @@ def build_bundle(now):
             "int_us": tdoa_snapshot.get(ch, 0)  # Raw interrupt timestamp from snapshot
         }
 
-    # Compute relative TDOA (reference to first interrupt)
+    # Compute relative TDOA (reference to first interrupt) - legacy method
     tdoa = {}
     if tdoa_snapshot:
         t0 = min(tdoa_snapshot.values())
         for ch in CHANNELS:
             tdoa[str(ch)] = tdoa_snapshot.get(ch, t0) - t0
 
+    # Compute interpolated peak times from waveform (new accurate method)
+    peak_times = {}
+    sample_counts = {}
+    for ch in CHANNELS:
+        samples = waveform.get(ch, [])
+        sample_counts[str(ch)] = len(samples)
+        if len(samples) >= 3:
+            peak_times[ch] = find_peak_time_interpolated(samples)
+
+    # Compute relative TDOA from interpolated peaks
+    peak_tdoa = {}
+    if peak_times:
+        t0 = min(peak_times.values())
+        for ch in CHANNELS:
+            if ch in peak_times:
+                peak_tdoa[str(ch)] = peak_times[ch] - t0
+            else:
+                peak_tdoa[str(ch)] = 0
+
     return {
         "type":"hit_bundle","node":NODE_ID,"seq":seq,"t_ms":now,
         "first":first_ch,"order":[first_ch] if first_ch is not None else [],
         "event_ms":EVENT_MS,"refract_ms":REFRACT_MS,
-        "fw_ver":"tdoa_v1",
+        "fw_ver":"tdoa_v2",  # Updated version for peak TDOA
         "K_SIGMA":K_SIGMA,"SIGMA_CAP":SIGMA_CAP,
         "channels": CHANNELS,
         "ch": chs,
-        "tdoa_us": tdoa  # {channel: microseconds relative to first arrival}
+        "tdoa_us": tdoa,           # Legacy: interrupt-based TDOA
+        "peak_tdoa_us": peak_tdoa, # NEW: Interpolated peak-based TDOA
+        "sample_count": sample_counts  # Debug: samples per channel
     }
 
 # ---------- INIT BASELINES ----------
@@ -354,6 +434,7 @@ def main_loop():
     global snapshot_thr, peak_mag, peak_xyz, first_ch, seq
     global sum_energy, sum_energy2, sum_samples
     global armed, last_over_ts, last_debug_ping
+    global waveform  # For peak-time TDOA
 
     now0 = time.ticks_ms()
     init_baselines(now0)
@@ -393,7 +474,14 @@ def main_loop():
                 armed = True
 
         if in_event:
+            t_us = time.ticks_us()  # Timestamp for waveform samples
             for ch in magv:
+                # Capture waveform sample with timestamp for peak-time TDOA
+                if ch not in waveform:
+                    waveform[ch] = []
+                if len(waveform[ch]) < MAX_WAVEFORM_SAMPLES:
+                    waveform[ch].append((t_us, magv[ch]))
+
                 if magv[ch] > peak_mag.get(ch, 0.0):
                     peak_mag[ch] = magv[ch]
                     peak_xyz[ch] = xyz[ch]
@@ -473,6 +561,7 @@ def main_loop():
             sum_energy  = {c: 0.0 for c in CHANNELS}
             sum_energy2 = {c: 0.0 for c in CHANNELS}
             sum_samples = {c: 0 for c in CHANNELS}
+            waveform = {c: [] for c in CHANNELS}  # Reset waveform buffer for new event
             time.sleep_ms(dt); continue
 
         for ch in magv:
