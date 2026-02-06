@@ -1,7 +1,9 @@
 # backend/udp_listener.py
-import asyncio, json, math, time
+import asyncio, json, math, time, csv
 from math import log
 from typing import Dict, Any, Callable, Optional
+from datetime import datetime
+from pathlib import Path
 import os
 try:
     from mode_state import get_mode as default_get_mode
@@ -29,6 +31,129 @@ def features_from_peaks(pN: float, pE: float, pW: float, pS: float):
     sx = (pE - pW) / (pE + pW + eps)
     sy = (pN - pS) / (pN + pS + eps)
     return sx, sy
+
+# ---------- TDOA LOCALIZATION ----------
+# Wave speed in straw target (m/s) - tune based on actual measurements
+TDOA_WAVE_SPEED = 150.0
+TDOA_WEIGHT = 0.5  # 0.0 = pure energy, 1.0 = pure TDOA
+TDOA_ENABLED = True
+
+def tdoa_localize(tdoa_us: Dict[str, int], ch2comp: Dict[str, str], wave_speed: float = TDOA_WAVE_SPEED):
+    """
+    Compute (sx, sy) features from TDOA timing.
+
+    tdoa_us: {"0": dt_us, "1": dt_us, ...} - microseconds relative to first arrival
+    ch2comp: channel to compass mapping {"0": "N", ...}
+    wave_speed: estimated wave speed in m/s
+
+    Returns (sx, sy) normalized features, or (None, None) if not enough data.
+    """
+    if not tdoa_us or len(tdoa_us) < 4:
+        return None, None
+
+    # Map channel TDOA to compass directions
+    tdoa_comp = {}
+    for ch_str, dt_us in tdoa_us.items():
+        comp = ch2comp.get(ch_str)
+        if comp:
+            tdoa_comp[comp] = dt_us
+
+    if len(tdoa_comp) < 4:
+        return None, None
+
+    # Convert to distance differences (meters)
+    # A later arrival means the sensor is FURTHER from the impact
+    dN = tdoa_comp.get("N", 0) * 1e-6 * wave_speed
+    dW = tdoa_comp.get("W", 0) * 1e-6 * wave_speed
+    dS = tdoa_comp.get("S", 0) * 1e-6 * wave_speed
+    dE = tdoa_comp.get("E", 0) * 1e-6 * wave_speed
+
+    # Compute normalized ratios
+    # If East arrives later than West, impact is closer to West (negative X)
+    dx = dE - dW  # positive = impact closer to West
+    dy = dN - dS  # positive = impact closer to South
+
+    # Normalize to [-1, 1] range
+    # Assume max distance difference is ~0.5m (half target width)
+    max_diff = 0.5
+    sx = -dx / max_diff  # flip sign for coordinate system
+    sy = -dy / max_diff
+
+    # Clamp to valid range
+    sx = max(-1.0, min(1.0, sx))
+    sy = max(-1.0, min(1.0, sy))
+
+    return sx, sy
+
+# ---------- CSV HIT LOGGING ----------
+HIT_LOG_DIR = Path(__file__).parent / "data" / "logs"
+HIT_LOG_FILE = HIT_LOG_DIR / "arrow_hits.csv"
+HIT_LOG_ENABLED = True
+
+def init_hit_log():
+    """Create log directory and CSV header if needed."""
+    if not HIT_LOG_ENABLED:
+        return
+    HIT_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    if not HIT_LOG_FILE.exists():
+        with open(HIT_LOG_FILE, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                "timestamp", "seq", "node",
+                # Position (final blended)
+                "x_m", "y_m", "sx", "sy",
+                # Energy features
+                "sx_energy", "sy_energy",
+                "total_energy", "max_peak", "dom_ratio",
+                # TDOA features
+                "sx_tdoa", "sy_tdoa",
+                "tdoa_N_us", "tdoa_W_us", "tdoa_S_us", "tdoa_E_us",
+                # Per-channel energy
+                "energy_N", "energy_W", "energy_S", "energy_E",
+                # Classification
+                "label", "score"
+            ])
+
+def log_hit(evt: Dict[str, Any]):
+    """Append a hit to the CSV log file."""
+    if not HIT_LOG_ENABLED:
+        return
+    try:
+        with open(HIT_LOG_FILE, "a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                datetime.now().isoformat(),
+                evt.get("seq", ""),
+                evt.get("node", ""),
+                # Position
+                round(evt.get("x_m", 0), 4),
+                round(evt.get("y_m", 0), 4),
+                round(evt.get("sx", 0), 4),
+                round(evt.get("sy", 0), 4),
+                # Energy features
+                round(evt.get("sx_energy", 0), 4),
+                round(evt.get("sy_energy", 0), 4),
+                round(evt.get("total_energy", 0), 1),
+                round(evt.get("max_peak", 0), 1),
+                round(evt.get("dom_ratio", 0), 4),
+                # TDOA features
+                round(evt.get("sx_tdoa", 0) or 0, 4),
+                round(evt.get("sy_tdoa", 0) or 0, 4),
+                evt.get("tdoa_N_us", 0),
+                evt.get("tdoa_W_us", 0),
+                evt.get("tdoa_S_us", 0),
+                evt.get("tdoa_E_us", 0),
+                # Per-channel energy
+                round(evt.get("energy_N", 0), 1),
+                round(evt.get("energy_W", 0), 1),
+                round(evt.get("energy_S", 0), 1),
+                round(evt.get("energy_E", 0), 1),
+                # Classification
+                evt.get("label", ""),
+                evt.get("score", 0)
+            ])
+    except Exception as e:
+        print(f"[HIT_LOG] Error writing to CSV: {e}")
 
 def xy_from_features(sx: float, sy: float, fit):
     """Map normalized features -> meters. Uses calibration fit when available."""
@@ -134,6 +259,9 @@ class UDPProtocol(asyncio.DatagramProtocol):
         self.debug_print = True
         self.pretty_print = True
         self.ghost_floor = 10.0    # print smaller events while tuning
+
+        # Initialize CSV hit logging
+        init_hit_log()
         
     def datagram_received(self, data: bytes, addr):
         try:
@@ -239,6 +367,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
         # ----------------------
         label = "HIT"
         reason = "pass"
+        score = 0  # Will be set by score classifier
 
         # Hard rejects first
         if energy < self.min_energy:
@@ -397,15 +526,45 @@ class UDPProtocol(asyncio.DatagramProtocol):
             w = frac / floor
             return max(-1.0, min(1.0, v * w))
 
-        sx = _blend_to_zero(sx_raw, x_frac, x_floor_ratio)
-        sy = _blend_to_zero(sy_raw, y_frac, y_floor_ratio)
+        sx_energy = _blend_to_zero(sx_raw, x_frac, x_floor_ratio)
+        sy_energy = _blend_to_zero(sy_raw, y_frac, y_floor_ratio)
 
         # Optional: small deadzone to stabilize near-center noise
         deadzone = 0.03
-        if abs(sx) < deadzone:
-            sx = 0.0
-        if abs(sy) < deadzone:
-            sy = 0.0
+        if abs(sx_energy) < deadzone:
+            sx_energy = 0.0
+        if abs(sy_energy) < deadzone:
+            sy_energy = 0.0
+
+        # ----------------------
+        # TDOA-based localization (hybrid with energy)
+        # ----------------------
+        tdoa_us = msg.get("tdoa_us", {})
+        sx_tdoa, sy_tdoa = None, None
+        tdoa_comp = {}
+
+        if TDOA_ENABLED and tdoa_us and len(tdoa_us) >= 4:
+            sx_tdoa, sy_tdoa = tdoa_localize(tdoa_us, self.ch2comp)
+
+            # Map TDOA to compass for logging
+            for ch_str, dt_us in tdoa_us.items():
+                c = self.ch2comp.get(ch_str)
+                if c:
+                    tdoa_comp[c] = dt_us
+
+            if getattr(self, "debug_print", False):
+                print(f"[TDOA] N={tdoa_comp.get('N', 0)}us  W={tdoa_comp.get('W', 0)}us  S={tdoa_comp.get('S', 0)}us  E={tdoa_comp.get('E', 0)}us")
+                if sx_tdoa is not None:
+                    print(f"       sx_tdoa={sx_tdoa:+.3f}  sy_tdoa={sy_tdoa:+.3f}")
+
+        # Blend energy and TDOA features
+        if TDOA_ENABLED and sx_tdoa is not None and sy_tdoa is not None:
+            sx = (1 - TDOA_WEIGHT) * sx_energy + TDOA_WEIGHT * sx_tdoa
+            sy = (1 - TDOA_WEIGHT) * sy_energy + TDOA_WEIGHT * sy_tdoa
+            if getattr(self, "debug_print", False):
+                print(f"[BLEND] weight={TDOA_WEIGHT:.2f}  sx_e={sx_energy:+.3f} sx_t={sx_tdoa:+.3f} -> sx={sx:+.3f}")
+        else:
+            sx, sy = sx_energy, sy_energy
 
         fit = self.fit_getter() if self.fit_getter else None
         if getattr(self, "debug_print", False):
@@ -418,7 +577,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
             print(
                 f"[FIT] {fit_info}  "
                 f"x_frac={x_frac:.2f} y_frac={y_frac:.2f}  "
-                f"sx_raw={sx_raw:+.3f} sy_raw={sy_raw:+.3f} -> sx={sx:+.3f} sy={sy:+.3f}"
+                f"sx_raw={sx_raw:+.3f} sy_raw={sy_raw:+.3f} -> sx_e={sx_energy:+.3f} sy_e={sy_energy:+.3f} -> sx={sx:+.3f} sy={sy:+.3f}"
             )
 
         x, y = xy_from_features(sx, sy, fit)
@@ -436,6 +595,34 @@ class UDPProtocol(asyncio.DatagramProtocol):
             "r": r,
             "raw": msg,
         }
+
+        # Log hit to CSV (with extended data for analysis)
+        log_evt = {
+            "seq": seq,
+            "node": node,
+            "x_m": x,
+            "y_m": y,
+            "sx": sx,
+            "sy": sy,
+            "sx_energy": sx_energy,
+            "sy_energy": sy_energy,
+            "total_energy": energy,
+            "max_peak": max_peak,
+            "dom_ratio": dom_ratio,
+            "sx_tdoa": sx_tdoa,
+            "sy_tdoa": sy_tdoa,
+            "tdoa_N_us": tdoa_comp.get("N", 0),
+            "tdoa_W_us": tdoa_comp.get("W", 0),
+            "tdoa_S_us": tdoa_comp.get("S", 0),
+            "tdoa_E_us": tdoa_comp.get("E", 0),
+            "energy_N": comp["N"],
+            "energy_W": comp["W"],
+            "energy_S": comp["S"],
+            "energy_E": comp["E"],
+            "label": label,
+            "score": score,
+        }
+        log_hit(log_evt)
 
         try:
             self.queue.put_nowait(event)

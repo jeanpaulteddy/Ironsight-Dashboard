@@ -30,3 +30,10 @@ CAMERA_ENABLED = True  # Set to False to disable camera (e.g., for development)
 CAMERA_MODEL_PATH = "/usr/share/imx500-models/imx500_network_higherhrnet_coco.rpk"
 CAMERA_DETECTION_THRESHOLD = 0.3
 CAMERA_MJPEG_PORT = 8081
+
+# TDOA (Time Difference of Arrival) settings
+TDOA_ENABLED = True                # Enable TDOA-based localization
+TDOA_WAVE_SPEED = 150.0            # Wave propagation speed in straw target (m/s)
+TDOA_WEIGHT = 0.5                  # Blend weight: 0.0 = pure energy, 1.0 = pure TDOA
+HIT_LOG_ENABLED = True             # Enable CSV logging of all arrow hits
+HIT_LOG_DIR = "data/logs"          # Directory for hit logs

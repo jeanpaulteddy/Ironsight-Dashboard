@@ -1,0 +1,499 @@
+# Pico W code for detector-only mode: always sends hit candidates to Pi, which classifies + maps them.
+# Running on the Pico so ignore errors about missing modules (e.g. network, socket). This is the "main.py" that the Pico executes on boot.
+# ================== main.py (PICO detector-only: always sends events; Pi classifies + maps) ==================
+import machine, network, socket, time, math, ujson, struct
+from secrets import SSID, PASSWORD
+
+# ---------- USER CONFIG ----------
+NODE_ID      = "PICO_A01"
+CHANNELS     = [0, 1, 2, 3]
+
+PI_IP        = "192.168.41.62"
+DEST_PORT    = 5005
+DEBUG_PINGS  = False
+
+ODR_HZ       = 400   # Loop rate (actual I2C limits this)
+ADXL_ODR     = 0x0F  # ADXL345 internal ODR: 3200 Hz for TDOA precision
+EVENT_MS     = 120
+REFRACT_MS   = 250
+
+K_SIGMA      = 4.0
+SIGMA_CAP    = 20.0
+ALPHA_MEAN   = 0.02
+ALPHA_SIGMA  = 0.02
+
+WARMUP_MS        = 8000
+QUIET_ARM_MS     = 400     # was 1500; shorter since Pi now classifies
+MIN_MAG          = 260.0
+CONSEC_REQUIRED  = 1
+
+I2C_BUS_ID   = 0
+I2C_SDA_PIN  = 0
+I2C_SCL_PIN  = 1
+I2C_FREQ     = 50000
+
+TCA_ADDR     = 0x70
+ADXL_ADDRS   = [0x53, 0x1D]
+
+# ---------- TDOA CONFIG ----------
+# GPIO pins for INT1 from each sensor (direct wires, not through mux)
+INT_PINS = {0: 2, 1: 3, 2: 4, 3: 5}  # channel: GPIO pin
+
+# ADXL345 interrupt registers
+REG_THRESH_ACT    = 0x24  # Activity threshold
+REG_ACT_INACT_CTL = 0x27  # Activity control
+REG_INT_ENABLE    = 0x2E  # Interrupt enable
+REG_INT_MAP       = 0x2F  # Interrupt mapping
+REG_INT_SOURCE    = 0x30  # Interrupt source (read to clear)
+
+# Activity threshold (62.5mg per LSB, so 8 = 500mg)
+ACTIVITY_THRESHOLD = 8
+TDOA_ENABLED = True  # Feature flag for easy disable
+
+# ---------- RUNTIME STATE ----------
+running_mean, running_sigma, thr_now = {}, {}, {}
+in_event = False
+in_refract = False
+event_start_ms = 0
+refract_until = 0
+snapshot_thr, peak_mag, peak_xyz = {}, {}, {}
+
+sum_energy, sum_energy2, sum_samples = {}, {}, {}
+
+first_ch, seq = None, 0
+adxl_addr_by_ch = {}
+
+armed = False
+warmup_until = 0
+last_over_ts = 0
+consec_over = {}
+last_debug_ping = 0
+
+# TDOA interrupt state
+int_timestamps = {}  # {channel: timestamp_us}
+int_pins = {}        # {channel: Pin object}
+
+# ---------- I2C AUTO-DISCOVERY ----------
+MUX_ADDRS = [0x70,0x71,0x72,0x73,0x74,0x75,0x76,0x77]
+COMMON_PINS = {
+    0: [(0,1),(4,5),(8,9),(12,13),(16,17),(20,21)],
+    1: [(2,3),(6,7),(10,11),(14,15),(18,19)]
+}
+
+def try_make_i2c(bus, sda, scl, freq):
+    try:
+        i2c_try = machine.I2C(bus, sda=machine.Pin(sda), scl=machine.Pin(scl), freq=freq)
+        _ = i2c_try.scan()
+        return i2c_try
+    except Exception:
+        return None
+
+def auto_find_mux(initial_bus, initial_sda, initial_scl, freq):
+    candidates = [(initial_bus, initial_sda, initial_scl)]
+    for bus in [initial_bus, 1-initial_bus]:
+        for (sda, scl) in COMMON_PINS.get(bus, []):
+            if (bus,sda,scl) not in candidates:
+                candidates.append((bus,sda,scl))
+    tried_notes = []
+    for (bus, sda, scl) in candidates:
+        i2c_try = try_make_i2c(bus, sda, scl, freq)
+        if not i2c_try:
+            continue
+        found = i2c_try.scan()
+        for a in MUX_ADDRS:
+            if a in found:
+                return (i2c_try,bus,sda,scl,a)
+        for a in MUX_ADDRS:
+            try:
+                i2c_try.writeto(a,b"\x00")
+                if a in i2c_try.scan():
+                    return (i2c_try,bus,sda,scl,a)
+            except Exception:
+                pass
+        tried_notes.append("I2C{} GP{}/GP{} saw {}".format(bus,sda,scl,[hex(x) for x in found]))
+    raise OSError("No PCA/TCA9548A found (0x70–0x77). Tried: " + " | ".join(tried_notes))
+
+# ---------- LOW-LEVEL I2C + RECOVERY ----------
+i2c = None
+def mag3(x,y,z): return math.sqrt(x*x + y*y + z*z)
+
+def _bitbang_bus_reset():
+    scl = machine.Pin(I2C_SCL_PIN, machine.Pin.OUT, value=1)
+    sda_in = machine.Pin(I2C_SDA_PIN, machine.Pin.IN, machine.Pin.PULL_UP)
+    for _ in range(9):
+        if sda_in.value() == 1:
+            break
+        scl.value(0); time.sleep_us(5)
+        scl.value(1); time.sleep_us(5)
+    sda_out = machine.Pin(I2C_SDA_PIN, machine.Pin.OUT, value=1)
+    scl.value(1); time.sleep_us(5)
+    sda_out.value(1); time.sleep_us(5)
+
+def _reinit_i2c():
+    global i2c
+    i2c = machine.I2C(I2C_BUS_ID, sda=machine.Pin(I2C_SDA_PIN), scl=machine.Pin(I2C_SCL_PIN), freq=I2C_FREQ)
+    time.sleep_ms(2)
+    try:
+        i2c.writeto(TCA_ADDR, b"\x00")
+    except Exception:
+        pass
+    time.sleep_ms(1)
+
+def _recover_bus_and_retry(func, *args, tries=2, **kwargs):
+    last = None
+    for _ in range(tries):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            last = e
+            try:
+                _bitbang_bus_reset()
+                _reinit_i2c()
+            except Exception:
+                pass
+            time.sleep_ms(2)
+    raise last
+
+def select_mux_channel(ch):
+    def _do():
+        i2c.writeto(TCA_ADDR, b"\x00")
+        time.sleep_ms(1)
+        i2c.writeto(TCA_ADDR, bytes([1<<ch]))
+        time.sleep_ms(1)
+    try:
+        _do()
+    except Exception:
+        _recover_bus_and_retry(_do)
+
+def i2c_read_mem_retry(addr, reg, n, tries=3):
+    last = None
+    for _ in range(tries):
+        try:
+            return i2c.readfrom_mem(addr, reg, n)
+        except Exception as e:
+            last = e
+            time.sleep_ms(2)
+    raise last
+
+def i2c_write_mem_retry(addr, reg, valbytes, tries=3):
+    last = None
+    for _ in range(tries):
+        try:
+            i2c.writeto_mem(addr, reg, valbytes)
+            return
+        except Exception as e:
+            last = e
+            time.sleep_ms(2)
+    raise last
+
+def adxl_read(ch, addr, start, length):
+    select_mux_channel(ch)
+    return i2c_read_mem_retry(addr, start, length)
+
+def adxl_write(ch, addr, reg, val):
+    select_mux_channel(ch)
+    i2c_write_mem_retry(addr, reg, bytes([val]))
+
+# ---------- ADXL345 SETUP/READ ----------
+def detect_adxl_addr(ch):
+    for addr in ADXL_ADDRS:
+        try:
+            d = adxl_read(ch, addr, 0x00, 1)
+            if d and d[0] == 0xE5:
+                return addr
+        except Exception:
+            pass
+    return None
+
+def init_adxl345(ch, addr):
+    adxl_write(ch, addr, 0x2D, 0x00); time.sleep_ms(2)  # standby
+    adxl_write(ch, addr, 0x31, 0x08)                  # full-res ±2g
+    adxl_write(ch, addr, 0x2C, ADXL_ODR)              # 3200 Hz ODR for TDOA precision
+
+    # Configure activity interrupt for TDOA
+    if TDOA_ENABLED:
+        adxl_write(ch, addr, REG_THRESH_ACT, ACTIVITY_THRESHOLD)  # Activity threshold
+        adxl_write(ch, addr, REG_ACT_INACT_CTL, 0x70)  # AC-coupled, XYZ axes
+        adxl_write(ch, addr, REG_INT_MAP, 0x00)        # Map activity to INT1
+        adxl_write(ch, addr, REG_INT_ENABLE, 0x10)     # Enable activity interrupt
+
+    adxl_write(ch, addr, 0x2D, 0x08)                  # measure mode
+
+def read_adxl345(ch):
+    addr = adxl_addr_by_ch[ch]
+    try:
+        d = adxl_read(ch, addr, 0x32, 6)
+    except Exception:
+        select_mux_channel(ch)
+        d = i2c_read_mem_retry(addr, 0x32, 6)
+    x, y, z = struct.unpack('<hhh', d)
+    return (x, y, z)
+
+# ---------- BASELINE ----------
+def update_baseline(ch, m):
+    mu = running_mean[ch]
+    sg = running_sigma[ch]
+    mu = (1-ALPHA_MEAN)*mu + ALPHA_MEAN*m
+    dev = abs(m-mu)
+    sg = (1-ALPHA_SIGMA)*sg + ALPHA_SIGMA*dev
+    if sg > SIGMA_CAP: sg = SIGMA_CAP
+    running_mean[ch], running_sigma[ch] = mu, sg
+    thr_now[ch] = mu + K_SIGMA*sg
+
+# ---------- TDOA INTERRUPTS ----------
+def make_int_handler(ch):
+    """Factory function to create channel-specific interrupt handler."""
+    def handler(pin):
+        global int_timestamps
+        if ch not in int_timestamps:
+            int_timestamps[ch] = time.ticks_us()
+    return handler
+
+def setup_interrupts():
+    """Configure GPIO interrupts for each sensor's INT1 pin."""
+    global int_pins
+    if not TDOA_ENABLED:
+        return
+    for ch, gpio in INT_PINS.items():
+        if ch in CHANNELS:
+            pin = machine.Pin(gpio, machine.Pin.IN, machine.Pin.PULL_DOWN)
+            pin.irq(trigger=machine.Pin.IRQ_RISING, handler=make_int_handler(ch))
+            int_pins[ch] = pin
+            print("INT{}: GP{} configured".format(ch, gpio))
+
+def clear_interrupts():
+    """Reset interrupt state and clear ADXL345 interrupt registers."""
+    global int_timestamps
+    int_timestamps = {}
+    if not TDOA_ENABLED:
+        return
+    for ch in CHANNELS:
+        if ch in adxl_addr_by_ch:
+            try:
+                adxl_read(ch, adxl_addr_by_ch[ch], REG_INT_SOURCE, 1)
+            except:
+                pass
+
+# ---------- NETWORK ----------
+udp = None
+DEST_IP = None
+
+def connect_wifi():
+    wlan = network.WLAN(network.STA_IF)
+    wlan.active(True)
+    wlan.connect(SSID, PASSWORD)
+    while not wlan.isconnected():
+        time.sleep_ms(100)
+    ip, netmask, gw, dns = wlan.ifconfig()
+    print("Wi-Fi:", (ip, netmask, gw, dns))
+    return wlan
+
+def init_udp_unicast(pi_ip):
+    global udp, DEST_IP
+    DEST_IP = pi_ip
+    udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    print("UDP unicast ->", DEST_IP, DEST_PORT)
+
+def send_bundle(b):
+    try:
+        udp.sendto(ujson.dumps(b).encode(), (DEST_IP, DEST_PORT))
+    except Exception as e:
+        print("send error:", e)
+
+# ---------- PACKETS ----------
+def build_bundle(now):
+    chs = {}
+    for ch in CHANNELS:
+        x,y,z = peak_xyz.get(ch,(0,0,0))
+        chs[str(ch)] = {
+            "peak": round(peak_mag.get(ch,0.0),1),
+            "energy":  round(sum_energy.get(ch, 0.0), 1),
+            "energy2": round(sum_energy2.get(ch, 0.0), 1),
+            "samples": int(sum_samples.get(ch, 0)),
+            "x": x, "y": y, "z": z,
+            "thr": round(snapshot_thr.get(ch,0.0),1),
+            "int_us": int_timestamps.get(ch, 0)  # Raw interrupt timestamp
+        }
+
+    # Compute relative TDOA (reference to first interrupt)
+    tdoa = {}
+    if int_timestamps:
+        t0 = min(int_timestamps.values())
+        for ch in CHANNELS:
+            tdoa[str(ch)] = int_timestamps.get(ch, t0) - t0
+
+    return {
+        "type":"hit_bundle","node":NODE_ID,"seq":seq,"t_ms":now,
+        "first":first_ch,"order":[first_ch] if first_ch is not None else [],
+        "event_ms":EVENT_MS,"refract_ms":REFRACT_MS,
+        "fw_ver":"tdoa_v1",
+        "K_SIGMA":K_SIGMA,"SIGMA_CAP":SIGMA_CAP,
+        "channels": CHANNELS,
+        "ch": chs,
+        "tdoa_us": tdoa  # {channel: microseconds relative to first arrival}
+    }
+
+# ---------- INIT BASELINES ----------
+def init_baselines(now):
+    global warmup_until, armed, consec_over
+    for ch in CHANNELS:
+        running_mean[ch] = 0.0
+        running_sigma[ch] = 0.5
+        thr_now[ch] = K_SIGMA * 0.5
+        consec_over[ch] = 0
+    warmup_until = time.ticks_add(now, WARMUP_MS)
+    armed = False
+
+# ---------- MAIN LOOP ----------
+def main_loop():
+    global in_event, in_refract, event_start_ms, refract_until
+    global snapshot_thr, peak_mag, peak_xyz, first_ch, seq
+    global sum_energy, sum_energy2, sum_samples
+    global armed, last_over_ts, last_debug_ping
+
+    now0 = time.ticks_ms()
+    init_baselines(now0)
+    dt = int(1000 / ODR_HZ)
+
+    while True:
+        now = time.ticks_ms()
+
+        xyz, magv = {}, {}
+        for ch in CHANNELS:
+            if ch not in adxl_addr_by_ch:
+                continue
+            try:
+                x,y,z = read_adxl345(ch)
+            except Exception:
+                try:
+                    _bitbang_bus_reset(); _reinit_i2c(); select_mux_channel(ch)
+                    x,y,z = read_adxl345(ch)
+                except Exception:
+                    continue
+            xyz[ch] = (x,y,z)
+            magv[ch] = mag3(x,y,z)
+
+        if not magv:
+            time.sleep_ms(dt); continue
+
+        if in_refract:
+            if time.ticks_diff(refract_until, now) > 0:
+                time.sleep_ms(dt); continue
+            in_refract = False
+
+        if time.ticks_diff(now, warmup_until) < 0:
+            for ch in magv: update_baseline(ch, magv[ch])
+            time.sleep_ms(dt); continue
+        else:
+            if time.ticks_diff(now, last_over_ts) > QUIET_ARM_MS:
+                armed = True
+
+        if in_event:
+            for ch in magv:
+                if magv[ch] > peak_mag.get(ch, 0.0):
+                    peak_mag[ch] = magv[ch]
+                    peak_xyz[ch] = xyz[ch]
+
+                mu = running_mean.get(ch, 0.0)
+                e = magv[ch] - mu
+                if e > 0:
+                    sum_energy[ch]  = sum_energy.get(ch, 0.0)  + e
+                    sum_energy2[ch] = sum_energy2.get(ch, 0.0) + (e * e)
+                sum_samples[ch] = sum_samples.get(ch, 0) + 1
+
+            if time.ticks_diff(now, event_start_ms) >= EVENT_MS:
+                # Always send candidate bundle; Pi classifies
+                event_max_peak = 0.0
+                for c in CHANNELS:
+                    pv = peak_mag.get(c, 0.0)
+                    if pv > event_max_peak:
+                        event_max_peak = pv
+                e2_sum = 0.0
+                for c in CHANNELS:
+                    e2_sum += sum_energy2.get(c, 0.0)
+
+                print("SEND", now, "seq", seq, "maxPeak", event_max_peak, "sumE2", e2_sum)
+                send_bundle(build_bundle(now))
+                seq += 1
+
+                # Clear interrupts for next event
+                clear_interrupts()
+
+                in_event = False; in_refract = True; armed = False
+                refract_until = time.ticks_add(now, REFRACT_MS)
+
+            time.sleep_ms(dt); continue
+
+        trig = None; any_over = False
+        for ch in magv:
+            mu = running_mean.get(ch, 0.0)
+            sg = running_sigma.get(ch, 0.5)
+            delta = magv[ch] - mu
+            over = (delta > (K_SIGMA * sg)) and (magv[ch] >= MIN_MAG)
+            if over:
+                any_over = True
+                consec_over[ch] = min(CONSEC_REQUIRED, consec_over.get(ch,0)+1)
+                if consec_over[ch] >= CONSEC_REQUIRED and armed:
+                    trig = ch; break
+            else:
+                consec_over[ch] = 0
+
+        if any_over:
+            last_over_ts = now
+
+        if trig is not None:
+            # Wait briefly for all interrupts to fire (wave propagation across target)
+            if TDOA_ENABLED:
+                time.sleep_ms(10)  # Max expected wave propagation time
+            print("TRIG", now, "ch", trig, "mag", magv.get(trig), "tdoa", int_timestamps)
+            in_event = True; first_ch = trig; event_start_ms = now
+            snapshot_thr = {c: thr_now.get(c, 0.0) for c in CHANNELS}
+            peak_mag = {c: magv.get(c, 0.0) for c in CHANNELS}
+            peak_xyz = {c: xyz.get(c, (0,0,0)) for c in CHANNELS}
+            sum_energy  = {c: 0.0 for c in CHANNELS}
+            sum_energy2 = {c: 0.0 for c in CHANNELS}
+            sum_samples = {c: 0 for c in CHANNELS}
+            time.sleep_ms(dt); continue
+
+        for ch in magv:
+            update_baseline(ch, magv[ch])
+
+        time.sleep_ms(dt)
+
+# ---------- ENTRY ----------
+def main():
+    global i2c, I2C_BUS_ID, I2C_SDA_PIN, I2C_SCL_PIN, TCA_ADDR
+
+    print("Connecting Wi-Fi …")
+    connect_wifi()
+    init_udp_unicast(PI_IP)
+
+    print("Probing I2C …")
+    i2c, bus, sda, scl, mux_addr = auto_find_mux(I2C_BUS_ID, I2C_SDA_PIN, I2C_SCL_PIN, I2C_FREQ)
+    I2C_BUS_ID, I2C_SDA_PIN, I2C_SCL_PIN, TCA_ADDR = bus, sda, scl, mux_addr
+    print("I2C:", {"bus": bus, "sda": sda, "scl": scl, "freq": I2C_FREQ}, "mux", hex(mux_addr))
+    print("I2C scan:", [hex(a) for a in i2c.scan()])
+
+    ok = []
+    for ch in CHANNELS:
+        addr = detect_adxl_addr(ch)
+        if addr:
+            adxl_addr_by_ch[ch] = addr
+            ok.append(ch)
+            print("CH{}: ADXL345 @{}".format(ch, hex(addr)))
+        else:
+            print("CH{}: no ADXL345".format(ch))
+    if not ok:
+        raise OSError("No ADXL devices detected on any channel.")
+
+    for ch in ok:
+        init_adxl345(ch, adxl_addr_by_ch[ch])
+
+    # Setup TDOA hardware interrupts
+    setup_interrupts()
+    clear_interrupts()  # Clear any initial triggers
+
+    print("Starting loop.")
+    main_loop()
+
+main()
