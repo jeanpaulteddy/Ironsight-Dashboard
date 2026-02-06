@@ -116,7 +116,7 @@
         class="targetClick"
         @click="onTargetClick"
       >
-        <TargetView :shots="pendingDot" :rings="rings" :disableAutoZoom="true" />
+        <TargetView :shots="pendingDot" :rings="rings" :disableAutoZoom="true" :size="1000" />
       </div>
       <div v-else class="loading">Loading target…</div>
       <div v-if="isPendingOutside" class="outsideWarning">
@@ -273,8 +273,8 @@ function onTargetClick(ev) {
 
   const rect = canvasEl.getBoundingClientRect()
 
-  // Map CSS pixels -> canvas pixels (because canvas internal units are fixed at 520)
-  const SIZE = 520
+  // Map CSS pixels -> canvas pixels (must match TargetView's size prop)
+  const SIZE = 1000
   const CX = SIZE / 2
   const CY = SIZE / 2
   const PAD = 14
@@ -294,9 +294,9 @@ function onTargetClick(ev) {
   // TargetView uses: SCALE = (CX - PAD) / maxR
   // This ensures calibration and display use identical transformations
   const Rm = outerRadiusCm()
-  const SCALE = radiusCanvas / Rm  // pixels per meter
+  const SCALE = radiusCanvas / Rm  // pixels per cm
 
-  // Convert canvas pixels directly to meters
+  // Convert canvas pixels to cm
   const x_gt = px / SCALE
   const y_gt = -py / SCALE  // Invert Y (canvas Y down, target Y up)
 
@@ -419,7 +419,7 @@ onMounted(async () => {
 }
 
 .targetWrap{ display:flex; flex-direction:column; align-items:center; margin: 10px 0 14px; }
-.targetClick{ width: min(520px, 92vw); }
+.targetClick{ width: min(1000px, 92vw); }
 
 .outsideWarning {
   margin-top: 10px;
