@@ -444,12 +444,25 @@ def main_loop():
             # Capture TDOA timestamps immediately (they should already be set from interrupts)
             # Then wait briefly for any remaining sensors to fire
             if TDOA_ENABLED:
-                time.sleep_ms(10)  # Max expected wave propagation time
+                time.sleep_ms(10)  # Wait for all sensors to fire
                 tdoa_snapshot = dict(int_timestamps)  # Snapshot the timestamps
+
+                # Diagnostic: show raw and relative timestamps
+                fired = [ch for ch in CHANNELS if ch in tdoa_snapshot]
+                missing = [ch for ch in CHANNELS if ch not in tdoa_snapshot]
+                if tdoa_snapshot:
+                    t0 = min(tdoa_snapshot.values())
+                    rel = {ch: tdoa_snapshot[ch] - t0 for ch in tdoa_snapshot}
+                    first_int = min(tdoa_snapshot, key=tdoa_snapshot.get)
+                    print("TDOA: fired={} missing={} first_int=ch{} rel_us={}".format(
+                        fired, missing, first_int, rel))
+                else:
+                    print("TDOA: NO INTERRUPTS FIRED! Check INT1 wiring.")
+
                 clear_interrupts()  # Clear for accurate timing on next event
             else:
                 tdoa_snapshot = {}
-            print("TRIG", now, "ch", trig, "mag", magv.get(trig), "tdoa", tdoa_snapshot)
+            print("TRIG", now, "ch", trig, "mag", magv.get(trig))
             in_event = True; first_ch = trig; event_start_ms = now
             snapshot_thr = {c: thr_now.get(c, 0.0) for c in CHANNELS}
             peak_mag = {c: magv.get(c, 0.0) for c in CHANNELS}
@@ -500,6 +513,10 @@ def main():
     # Setup TDOA hardware interrupts
     setup_interrupts()
     clear_interrupts()  # Clear any initial triggers
+
+    # Diagnostic: verify INT pin states
+    if TDOA_ENABLED:
+        print("INT pin states:", {ch: int_pins[ch].value() for ch in int_pins})
 
     print("Starting loop.")
     main_loop()
