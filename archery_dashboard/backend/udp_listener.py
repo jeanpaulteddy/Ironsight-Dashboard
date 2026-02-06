@@ -36,7 +36,6 @@ def features_from_peaks(pN: float, pE: float, pW: float, pS: float):
 # Wave speed in straw target (m/s) - tune based on actual measurements
 # Observed: ~12000µs max timing diff across 1.3m target → ~100 m/s
 TDOA_WAVE_SPEED = 100.0
-TDOA_WEIGHT = 0.5  # 0.0 = pure energy, 1.0 = pure TDOA
 TDOA_ENABLED = True
 TARGET_DIAMETER_M = 1.30  # Target diameter in meters
 
@@ -48,10 +47,10 @@ def tdoa_localize(tdoa_us: Dict[str, int], ch2comp: Dict[str, str], wave_speed: 
     ch2comp: channel to compass mapping {"0": "N", ...}
     wave_speed: estimated wave speed in m/s
 
-    Returns (sx, sy) normalized features, or (None, None) if not enough data.
+    Returns (sx, sy, confidence) - confidence is 0-1 based on timing quality.
     """
     if not tdoa_us or len(tdoa_us) < 4:
-        return None, None
+        return None, None, 0.0
 
     # Map channel TDOA to compass directions
     tdoa_comp = {}
@@ -61,7 +60,7 @@ def tdoa_localize(tdoa_us: Dict[str, int], ch2comp: Dict[str, str], wave_speed: 
             tdoa_comp[comp] = dt_us
 
     if len(tdoa_comp) < 4:
-        return None, None
+        return None, None, 0.0
 
     # Convert to distance differences (meters)
     # A later arrival means the sensor is FURTHER from the impact
@@ -81,57 +80,196 @@ def tdoa_localize(tdoa_us: Dict[str, int], ch2comp: Dict[str, str], wave_speed: 
     sx = -dx / max_diff  # flip sign for coordinate system
     sy = -dy / max_diff
 
+    # Compute TDOA confidence based on timing spread
+    # Good TDOA: clear timing differences, not all zeros, not all same
+    times = list(tdoa_comp.values())
+    max_time = max(times)
+    min_time = min(times)
+    spread = max_time - min_time  # microseconds
+
+    # Expected spread for edge hits: ~13000µs (1.3m / 100m/s)
+    # Center hits: smaller spread
+    # Confidence based on having reasonable spread (not 0, not impossibly large)
+    expected_max_spread = TARGET_DIAMETER_M / wave_speed * 1e6  # ~13000µs
+
+    if spread < 100:  # All sensors fired nearly simultaneously - suspicious
+        confidence = 0.2
+    elif spread > expected_max_spread * 1.5:  # Spread too large - timing error
+        confidence = 0.3
+    else:
+        # Good spread range - higher confidence
+        confidence = min(1.0, 0.5 + (spread / expected_max_spread) * 0.5)
+
     # Clamp to valid range
     sx = max(-1.0, min(1.0, sx))
     sy = max(-1.0, min(1.0, sy))
 
-    return sx, sy
+    return sx, sy, confidence
+
+
+def compute_energy_confidence(comp: Dict[str, float], dom_ratio: float) -> float:
+    """
+    Compute confidence score for energy-based localization.
+    Higher confidence when energy is concentrated and axes are balanced.
+    """
+    pN, pE, pW, pS = comp.get("N", 0), comp.get("E", 0), comp.get("W", 0), comp.get("S", 0)
+    total = pN + pE + pW + pS
+
+    if total < 50:  # Very low energy - unreliable
+        return 0.2
+
+    # Check axis balance - both axes should have some energy
+    x_axis = pE + pW
+    y_axis = pN + pS
+    axis_balance = min(x_axis, y_axis) / (max(x_axis, y_axis) + 1e-12)
+
+    # Confidence based on dominance (concentrated impact) and axis balance
+    # High dom_ratio = good (concentrated), high axis_balance = good (both axes have signal)
+    confidence = 0.3 + 0.4 * dom_ratio + 0.3 * axis_balance
+
+    return min(1.0, max(0.0, confidence))
+
+
+def fuse_localization(sx_energy: float, sy_energy: float, energy_conf: float,
+                      sx_tdoa: Optional[float], sy_tdoa: Optional[float], tdoa_conf: float) -> tuple:
+    """
+    Intelligent fusion of energy and TDOA localization.
+
+    Returns (sx, sy, method_used) where method_used describes the fusion.
+    """
+    # If TDOA not available, use energy only
+    if sx_tdoa is None or sy_tdoa is None:
+        return sx_energy, sy_energy, "energy_only"
+
+    # Both methods available - fuse based on confidence and agreement
+
+    # Check agreement between methods
+    dx = abs(sx_energy - sx_tdoa)
+    dy = abs(sy_energy - sy_tdoa)
+    disagreement = math.sqrt(dx*dx + dy*dy)
+
+    # Normalize confidence weights
+    total_conf = energy_conf + tdoa_conf
+    if total_conf < 0.1:
+        # Both low confidence - average them
+        return (sx_energy + sx_tdoa) / 2, (sy_energy + sy_tdoa) / 2, "low_conf_avg"
+
+    w_energy = energy_conf / total_conf
+    w_tdoa = tdoa_conf / total_conf
+
+    if disagreement < 0.2:
+        # Methods agree well - weighted average
+        sx = w_energy * sx_energy + w_tdoa * sx_tdoa
+        sy = w_energy * sy_energy + w_tdoa * sy_tdoa
+        return sx, sy, f"agree_fuse(e={w_energy:.2f},t={w_tdoa:.2f})"
+
+    elif disagreement < 0.5:
+        # Moderate disagreement - trust higher confidence more
+        # But also consider that disagreement reduces overall confidence
+        penalty = 1.0 - (disagreement - 0.2) / 0.3 * 0.3  # 0-30% penalty
+        w_energy *= penalty
+        w_tdoa *= penalty
+        total = w_energy + w_tdoa
+        if total > 0:
+            w_energy /= total
+            w_tdoa /= total
+        sx = w_energy * sx_energy + w_tdoa * sx_tdoa
+        sy = w_energy * sy_energy + w_tdoa * sy_tdoa
+        return sx, sy, f"disagree_fuse(e={w_energy:.2f},t={w_tdoa:.2f})"
+
+    else:
+        # High disagreement - pick the higher confidence method
+        if energy_conf >= tdoa_conf:
+            return sx_energy, sy_energy, f"high_disagree_energy(conf={energy_conf:.2f})"
+        else:
+            return sx_tdoa, sy_tdoa, f"high_disagree_tdoa(conf={tdoa_conf:.2f})"
 
 # ---------- CSV HIT LOGGING ----------
 HIT_LOG_DIR = Path(__file__).parent / "data" / "logs"
-HIT_LOG_FILE = HIT_LOG_DIR / "arrow_hits.csv"
 HIT_LOG_ENABLED = True
 
+# CSV column headers - comprehensive for analysis
+CSV_HEADERS = [
+    # Identifiers
+    "date", "timestamp", "seq", "node", "session_id",
+    # Mode: "shooting" or "calibration"
+    "mode",
+    # Software estimated position (fused)
+    "x_est", "y_est", "sx", "sy",
+    # Ground truth (only filled during calibration confirmation)
+    "x_gt", "y_gt",
+    # Fusion details
+    "fusion_method", "energy_conf", "tdoa_conf",
+    # Energy features
+    "sx_energy", "sy_energy",
+    "total_energy", "max_peak", "dom_ratio",
+    # TDOA features
+    "sx_tdoa", "sy_tdoa",
+    "tdoa_N_us", "tdoa_W_us", "tdoa_S_us", "tdoa_E_us",
+    # Per-channel energy
+    "energy_N", "energy_W", "energy_S", "energy_E",
+    # Classification
+    "label", "score"
+]
+
+def get_log_file_for_date(date_str: str = None) -> Path:
+    """Get the log file path for a specific date (YYYY-MM-DD format)."""
+    if date_str is None:
+        date_str = datetime.now().strftime("%Y-%m-%d")
+    return HIT_LOG_DIR / f"arrow_hits_{date_str}.csv"
+
 def init_hit_log():
-    """Create log directory and CSV header if needed."""
+    """Create log directory. Headers are written per-file as needed."""
     if not HIT_LOG_ENABLED:
         return
     HIT_LOG_DIR.mkdir(parents=True, exist_ok=True)
-    if not HIT_LOG_FILE.exists():
-        with open(HIT_LOG_FILE, "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                "timestamp", "seq", "node",
-                # Position (final blended)
-                "x_m", "y_m", "sx", "sy",
-                # Energy features
-                "sx_energy", "sy_energy",
-                "total_energy", "max_peak", "dom_ratio",
-                # TDOA features
-                "sx_tdoa", "sy_tdoa",
-                "tdoa_N_us", "tdoa_W_us", "tdoa_S_us", "tdoa_E_us",
-                # Per-channel energy
-                "energy_N", "energy_W", "energy_S", "energy_E",
-                # Classification
-                "label", "score"
-            ])
 
-def log_hit(evt: Dict[str, Any]):
-    """Append a hit to the CSV log file."""
+def _ensure_csv_header(file_path: Path):
+    """Write CSV header if file doesn't exist or is empty."""
+    if not file_path.exists() or file_path.stat().st_size == 0:
+        with open(file_path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(CSV_HEADERS)
+
+def log_hit(evt: Dict[str, Any], mode: str = "shooting", session_id: str = ""):
+    """
+    Append a hit to today's CSV log file.
+
+    Args:
+        evt: Hit event data from UDP listener
+        mode: "shooting" or "calibration"
+        session_id: Optional session identifier for grouping
+    """
     if not HIT_LOG_ENABLED:
         return
     try:
-        with open(HIT_LOG_FILE, "a", newline="") as f:
+        now = datetime.now()
+        log_file = get_log_file_for_date(now.strftime("%Y-%m-%d"))
+        _ensure_csv_header(log_file)
+
+        with open(log_file, "a", newline="") as f:
             writer = csv.writer(f)
             writer.writerow([
-                datetime.now().isoformat(),
+                # Identifiers
+                now.strftime("%Y-%m-%d"),
+                now.strftime("%H:%M:%S.%f")[:-3],  # HH:MM:SS.mmm
                 evt.get("seq", ""),
                 evt.get("node", ""),
-                # Position
+                session_id,
+                # Mode
+                mode,
+                # Software estimated position
                 round(evt.get("x_m", 0), 4),
                 round(evt.get("y_m", 0), 4),
                 round(evt.get("sx", 0), 4),
                 round(evt.get("sy", 0), 4),
+                # Ground truth (empty for shooting, filled by calibration)
+                evt.get("x_gt", ""),
+                evt.get("y_gt", ""),
+                # Fusion details
+                evt.get("fusion_method", ""),
+                round(evt.get("energy_conf", 0), 3),
+                round(evt.get("tdoa_conf", 0), 3),
                 # Energy features
                 round(evt.get("sx_energy", 0), 4),
                 round(evt.get("sy_energy", 0), 4),
@@ -156,6 +294,14 @@ def log_hit(evt: Dict[str, Any]):
             ])
     except Exception as e:
         print(f"[HIT_LOG] Error writing to CSV: {e}")
+
+def log_calibration_confirmation(evt: Dict[str, Any], x_gt: float, y_gt: float, session_id: str = ""):
+    """
+    Log a calibration shot with ground truth position.
+    Called when user confirms where the arrow actually landed.
+    """
+    evt_with_gt = {**evt, "x_gt": round(x_gt, 4), "y_gt": round(y_gt, 4)}
+    log_hit(evt_with_gt, mode="calibration", session_id=session_id)
 
 def xy_from_features(sx: float, sy: float, fit):
     """Map normalized features -> meters. Uses calibration fit when available."""
@@ -539,14 +685,14 @@ class UDPProtocol(asyncio.DatagramProtocol):
             sy_energy = 0.0
 
         # ----------------------
-        # TDOA-based localization (hybrid with energy)
+        # TDOA-based localization (intelligent fusion with energy)
         # ----------------------
         tdoa_us = msg.get("tdoa_us", {})
-        sx_tdoa, sy_tdoa = None, None
+        sx_tdoa, sy_tdoa, tdoa_conf = None, None, 0.0
         tdoa_comp = {}
 
         if TDOA_ENABLED and tdoa_us and len(tdoa_us) >= 4:
-            sx_tdoa, sy_tdoa = tdoa_localize(tdoa_us, self.ch2comp)
+            sx_tdoa, sy_tdoa, tdoa_conf = tdoa_localize(tdoa_us, self.ch2comp)
 
             # Map TDOA to compass for logging
             for ch_str, dt_us in tdoa_us.items():
@@ -557,16 +703,20 @@ class UDPProtocol(asyncio.DatagramProtocol):
             if getattr(self, "debug_print", False):
                 print(f"[TDOA] N={tdoa_comp.get('N', 0)}us  W={tdoa_comp.get('W', 0)}us  S={tdoa_comp.get('S', 0)}us  E={tdoa_comp.get('E', 0)}us")
                 if sx_tdoa is not None:
-                    print(f"       sx_tdoa={sx_tdoa:+.3f}  sy_tdoa={sy_tdoa:+.3f}")
+                    print(f"       sx_tdoa={sx_tdoa:+.3f}  sy_tdoa={sy_tdoa:+.3f}  conf={tdoa_conf:.2f}")
 
-        # Blend energy and TDOA features
-        if TDOA_ENABLED and sx_tdoa is not None and sy_tdoa is not None:
-            sx = (1 - TDOA_WEIGHT) * sx_energy + TDOA_WEIGHT * sx_tdoa
-            sy = (1 - TDOA_WEIGHT) * sy_energy + TDOA_WEIGHT * sy_tdoa
-            if getattr(self, "debug_print", False):
-                print(f"[BLEND] weight={TDOA_WEIGHT:.2f}  sx_e={sx_energy:+.3f} sx_t={sx_tdoa:+.3f} -> sx={sx:+.3f}")
-        else:
-            sx, sy = sx_energy, sy_energy
+        # Compute energy confidence
+        energy_conf = compute_energy_confidence(comp, dom_ratio)
+
+        # Intelligent fusion of energy and TDOA
+        sx, sy, fusion_method = fuse_localization(
+            sx_energy, sy_energy, energy_conf,
+            sx_tdoa, sy_tdoa, tdoa_conf
+        )
+
+        if getattr(self, "debug_print", False):
+            print(f"[FUSION] method={fusion_method}  energy_conf={energy_conf:.2f}  tdoa_conf={tdoa_conf:.2f}")
+            print(f"         sx_e={sx_energy:+.3f} sy_e={sy_energy:+.3f} | sx_t={sx_tdoa if sx_tdoa else 'N/A':+.3f} sy_t={sy_tdoa if sy_tdoa else 'N/A':+.3f} -> sx={sx:+.3f} sy={sy:+.3f}")
 
         fit = self.fit_getter() if self.fit_getter else None
         if getattr(self, "debug_print", False):
@@ -606,25 +756,33 @@ class UDPProtocol(asyncio.DatagramProtocol):
             "y_m": y,
             "sx": sx,
             "sy": sy,
+            # Fusion details
+            "fusion_method": fusion_method,
+            "energy_conf": energy_conf,
+            "tdoa_conf": tdoa_conf,
+            # Energy features
             "sx_energy": sx_energy,
             "sy_energy": sy_energy,
             "total_energy": energy,
             "max_peak": max_peak,
             "dom_ratio": dom_ratio,
+            # TDOA features
             "sx_tdoa": sx_tdoa,
             "sy_tdoa": sy_tdoa,
             "tdoa_N_us": tdoa_comp.get("N", 0),
             "tdoa_W_us": tdoa_comp.get("W", 0),
             "tdoa_S_us": tdoa_comp.get("S", 0),
             "tdoa_E_us": tdoa_comp.get("E", 0),
+            # Per-channel energy
             "energy_N": comp["N"],
             "energy_W": comp["W"],
             "energy_S": comp["S"],
             "energy_E": comp["E"],
+            # Classification
             "label": label,
             "score": score,
         }
-        log_hit(log_evt)
+        log_hit(log_evt, mode=mode_s if mode_s else "shooting")
 
         try:
             self.queue.put_nowait(event)

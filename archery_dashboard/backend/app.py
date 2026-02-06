@@ -27,7 +27,7 @@ def get_latest_pose():
     return get_latest_pose_udp()
 from scoring import score_from_r
 from state import SessionState, Shot
-from udp_listener import udp_loop
+from udp_listener import udp_loop, log_calibration_confirmation
 from pydantic import BaseModel # type: ignore
 import threading
 from mode_state import get_mode, set_mode
@@ -179,16 +179,27 @@ async def dispatch_loop():
                 continue
 
             if calibration.get("pending") is None:
+                # Store full event data for CSV logging with ground truth later
+                raw_msg = evt.get("raw", {})
                 pending = {
                     "ts": time.time(),
-                    # raw features if provided by udp_listener.py (optional)
+                    # Raw features for calibration fit
                     "sx": evt.get("sx"),
                     "sy": evt.get("sy"),
-                    # current (uncalibrated) position
+                    # Current estimated position
                     "x": evt.get("x"),
                     "y": evt.get("y"),
                     "r": evt.get("r"),
-                    "raw": evt.get("raw"),
+                    # Full event data for CSV logging
+                    "log_data": {
+                        "seq": raw_msg.get("seq"),
+                        "node": raw_msg.get("node"),
+                        "x_m": evt.get("x"),
+                        "y_m": evt.get("y"),
+                        "sx": evt.get("sx"),
+                        "sy": evt.get("sy"),
+                        "raw": raw_msg,
+                    },
                 }
                 calibration["pending"] = pending
 
@@ -498,8 +509,9 @@ def cal_start():
     calibration["paused"] = False
     calibration["pending"] = None
     calibration["samples"] = []
+    calibration["session_id"] = f"cal_{int(time.time())}"  # Unique session ID for CSV grouping
     calibration.pop("fit", None)
-    return {"ok": True, "active": True}
+    return {"ok": True, "active": True, "session_id": calibration["session_id"]}
 
 @app.post("/api/calibration/pause")
 def cal_pause():
@@ -526,12 +538,22 @@ def cal_confirm(payload: dict):
         return {"ok": False, "error": "no pending shot"}
     x_gt = float(payload.get("x_gt"))
     y_gt = float(payload.get("y_gt"))
-    sample = {**calibration["pending"], "x_gt": x_gt, "y_gt": y_gt}
+
+    pending = calibration["pending"]
+    sample = {**pending, "x_gt": x_gt, "y_gt": y_gt}
     calibration["samples"].append(sample)
     calibration["pending"] = None
 
     count = len(calibration["samples"])
     print(f"[CAL] Arrow #{count} confirmed: sx={sample.get('sx', 0):.4f}, sy={sample.get('sy', 0):.4f} -> gt=({x_gt:.4f}, {y_gt:.4f})")
+
+    # Log to CSV with ground truth
+    log_data = pending.get("log_data", {})
+    if log_data:
+        session_id = calibration.get("session_id", f"cal_{int(time.time())}")
+        log_calibration_confirmation(log_data, x_gt, y_gt, session_id=session_id)
+        print(f"[CAL] Logged to CSV: estimated=({log_data.get('x_m', 0):.4f}, {log_data.get('y_m', 0):.4f}) -> ground_truth=({x_gt:.4f}, {y_gt:.4f})")
+
     response = {"ok": True, "count": count}
 
     # Auto-compute and apply fit when we have enough samples
