@@ -716,7 +716,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
 
         if getattr(self, "debug_print", False):
             print(f"[FUSION] method={fusion_method}  energy_conf={energy_conf:.2f}  tdoa_conf={tdoa_conf:.2f}")
-            print(f"         sx_e={sx_energy:+.3f} sy_e={sy_energy:+.3f} | sx_t={sx_tdoa if sx_tdoa else 'N/A':+.3f} sy_t={sy_tdoa if sy_tdoa else 'N/A':+.3f} -> sx={sx:+.3f} sy={sy:+.3f}")
+            print(f"         sx_e={sx_energy:+.3f} sy_e={sy_energy:+.3f} | sx_t={f'{sx_tdoa:+.3f}' if sx_tdoa else 'N/A'} sy_t={f'{sy_tdoa:+.3f}' if sy_tdoa else 'N/A'} -> sx={sx:+.3f} sy={sy:+.3f}")
 
         fit = self.fit_getter() if self.fit_getter else None
         if getattr(self, "debug_print", False):
