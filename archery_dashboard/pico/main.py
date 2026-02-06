@@ -46,8 +46,10 @@ REG_INT_ENABLE    = 0x2E  # Interrupt enable
 REG_INT_MAP       = 0x2F  # Interrupt mapping
 REG_INT_SOURCE    = 0x30  # Interrupt source (read to clear)
 
-# Activity threshold (62.5mg per LSB, so 8 = 500mg)
-ACTIVITY_THRESHOLD = 8
+# Activity threshold for TDOA interrupts (62.5mg per LSB)
+# 8 = 500mg, 16 = 1g, 32 = 2g, 48 = 3g
+# Higher = less sensitive to vibration, but still catches arrow impacts
+ACTIVITY_THRESHOLD = 48
 TDOA_ENABLED = True  # Feature flag for easy disable
 
 # ---------- RUNTIME STATE ----------
