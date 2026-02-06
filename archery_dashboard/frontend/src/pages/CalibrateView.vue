@@ -116,9 +116,12 @@
         class="targetClick"
         @click="onTargetClick"
       >
-        <TargetView :shots="pendingDot" :rings="rings" />
+        <TargetView :shots="pendingDot" :rings="rings" :disableAutoZoom="true" />
       </div>
       <div v-else class="loading">Loading target…</div>
+      <div v-if="isPendingOutside" class="outsideWarning">
+        ⚠ Arrow detected outside target — click where it actually landed
+      </div>
     </div>
 
     <div class="info">
@@ -184,6 +187,15 @@ function errorClass(cm) {
   return "bad"
 }
 
+// Check if the pending dot is outside the target (beyond ring 1)
+const isPendingOutside = computed(() => {
+  if (pendingDot.value.length === 0) return false
+  const ring1 = rings.value?.["1"]
+  if (typeof ring1 !== "number") return false
+  const shot = pendingDot.value[0]
+  return typeof shot.r === "number" && shot.r > ring1
+})
+
 function showResultsOverlay() {
   if (fit.value) {
     showResults.value = true
@@ -202,17 +214,9 @@ async function loadRings() {
 
 function outerRadiusM() {
   // Get ring 1 radius (outermost ring for standard target)
-  // This matches TargetView's maxR calculation for consistent SCALE
+  // Fixed scale - don't expand for outside shots (matches TargetView with disableAutoZoom)
   const ring1 = rings.value?.["1"]
-  const base = (typeof ring1 === "number") ? ring1 : 0.25
-
-  // Also consider any pending dot position so scale matches display
-  let maxShot = 0
-  for (const s of pendingDot.value) {
-    if (typeof s.r === "number" && s.r > maxShot) maxShot = s.r
-  }
-
-  return Math.max(base, maxShot)
+  return (typeof ring1 === "number") ? ring1 : 0.25
 }
 
 async function startCal() {
@@ -414,8 +418,20 @@ onMounted(async () => {
   cursor: pointer;
 }
 
-.targetWrap{ display:flex; justify-content:center; margin: 10px 0 14px; }
+.targetWrap{ display:flex; flex-direction:column; align-items:center; margin: 10px 0 14px; }
 .targetClick{ width: min(520px, 92vw); }
+
+.outsideWarning {
+  margin-top: 10px;
+  padding: 10px 16px;
+  border-radius: 10px;
+  background: rgba(255, 90, 90, 0.15);
+  border: 1px solid rgba(255, 90, 90, 0.4);
+  color: rgba(255, 120, 120, 0.95);
+  font-weight: 700;
+  font-size: 13px;
+  text-align: center;
+}
 
 .loading{ opacity:0.75; padding: 20px; }
 
