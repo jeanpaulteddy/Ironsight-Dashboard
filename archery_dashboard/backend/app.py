@@ -279,16 +279,16 @@ def _compute_fit_internal(samples: list) -> tuple[dict | None, str | None]:
     Compute calibration fit from samples.
     Returns (fit_dict, None) on success, or (None, error_string) on failure.
     Also sets calibration_fit global to apply immediately.
+
+    Uses linear model (3 params) for 3-5 samples, poly2 (6 params) for 6+.
     """
     global calibration_fit
 
-    if len(samples) < 6:
-        return None, f"need at least 6 samples (have {len(samples)})"
+    if len(samples) < 3:
+        return None, f"need at least 3 samples (have {len(samples)})"
 
-    # Build least-squares system
-    A = []
-    bx = []
-    by = []
+    # Build least-squares system - collect valid samples first
+    valid_samples = []
     for s in samples:
         sx = s.get("sx")
         sy = s.get("sy")
@@ -296,13 +296,26 @@ def _compute_fit_internal(samples: list) -> tuple[dict | None, str | None]:
         y_gt = s.get("y_gt")
         if sx is None or sy is None or x_gt is None or y_gt is None:
             continue
-        sx = float(sx); sy = float(sy)
-        A.append([sx, sy, sx*sy, sx*sx, sy*sy, 1.0])
-        bx.append(float(x_gt))
-        by.append(float(y_gt))
+        valid_samples.append((float(sx), float(sy), float(x_gt), float(y_gt)))
 
-    if len(A) < 6:
-        return None, f"not enough valid samples (have {len(A)})"
+    n_valid = len(valid_samples)
+    if n_valid < 3:
+        return None, f"not enough valid samples (have {n_valid})"
+
+    # Choose model based on sample count
+    use_poly2 = n_valid >= 6
+
+    A = []
+    bx = []
+    by = []
+    for sx, sy, x_gt, y_gt in valid_samples:
+        if use_poly2:
+            A.append([sx, sy, sx*sy, sx*sx, sy*sy, 1.0])
+        else:
+            # Linear model: just sx, sy, 1
+            A.append([sx, sy, 1.0])
+        bx.append(x_gt)
+        by.append(y_gt)
 
     A = np.array(A, dtype=np.float64)
     bx = np.array(bx, dtype=np.float64)
@@ -320,19 +333,28 @@ def _compute_fit_internal(samples: list) -> tuple[dict | None, str | None]:
     mean_cm = float(err.mean() * 100.0)
     max_cm = float(err.max() * 100.0)
 
-    params = {
-        "order": ["sx", "sy", "sx_sy", "sx2", "sy2", "1"],
-        "x": [float(v) for v in px.tolist()],
-        "y": [float(v) for v in py.tolist()],
-    }
+    if use_poly2:
+        model_name = "poly2_sxsy"
+        params = {
+            "order": ["sx", "sy", "sx_sy", "sx2", "sy2", "1"],
+            "x": [float(v) for v in px.tolist()],
+            "y": [float(v) for v in py.tolist()],
+        }
+    else:
+        model_name = "linear_sxsy"
+        params = {
+            "order": ["sx", "sy", "1"],
+            "x": [float(v) for v in px.tolist()],
+            "y": [float(v) for v in py.tolist()],
+        }
 
     # Apply fit immediately so next arrow uses it
     global calibration_fit_version
     calibration_fit_version += 1
-    calibration_fit = {"model": "poly2_sxsy", "params": params}
+    calibration_fit = {"model": model_name, "params": params}
 
     print("=" * 60)
-    print(f"[CAL] *** NEW FIT v{calibration_fit_version} COMPUTED & APPLIED ({len(err)} samples) ***")
+    print(f"[CAL] *** NEW FIT v{calibration_fit_version} COMPUTED & APPLIED ({len(err)} samples, {model_name}) ***")
     print(f"[CAL]   Mean error: {mean_cm:.2f} cm")
     print(f"[CAL]   Max error:  {max_cm:.2f} cm")
     print(f"[CAL]   X coeffs: {[f'{v:.6f}' for v in px.tolist()]}")
@@ -340,7 +362,7 @@ def _compute_fit_internal(samples: list) -> tuple[dict | None, str | None]:
     print("=" * 60)
 
     fit_result = {
-        "model": "poly2_sxsy",
+        "model": model_name,
         "params": params,
         "mean_error_cm": mean_cm,
         "max_error_cm": max_cm,

@@ -16,11 +16,11 @@
 
     <div class="liveStatsBox">
       <div v-if="fitErr" class="fitErr">Error: {{ fitErr }}</div>
-      <div v-else-if="sampleCount < 6" class="statsWaiting">
+      <div v-else-if="sampleCount < 3" class="statsWaiting">
         <div class="statsTitle">Calibration Progress</div>
-        <div class="statsHint">Need {{ 6 - sampleCount }} more sample{{ 6 - sampleCount === 1 ? '' : 's' }} to start computing accuracy</div>
+        <div class="statsHint">Need {{ 3 - sampleCount }} more sample{{ 3 - sampleCount === 1 ? '' : 's' }} to start computing accuracy</div>
         <div class="progressBar">
-          <div class="progressFill" :style="{ width: (sampleCount / 6 * 100) + '%' }"></div>
+          <div class="progressFill" :style="{ width: (sampleCount / 3 * 100) + '%' }"></div>
         </div>
       </div>
       <div v-else-if="fit" class="statsLive">

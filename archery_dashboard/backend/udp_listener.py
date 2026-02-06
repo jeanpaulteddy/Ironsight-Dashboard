@@ -310,7 +310,7 @@ def xy_from_features(sx: float, sy: float, fit):
         model = fit.get("model")
         p = fit.get("params", {})
 
-        # New: 2nd-order polynomial fit
+        # 2nd-order polynomial fit (6+ samples)
         if model == "poly2_sxsy":
             try:
                 cx = p["x"]  # list of 6 coeffs
@@ -318,6 +318,18 @@ def xy_from_features(sx: float, sy: float, fit):
                 feats = [sx, sy, sx * sy, sx * sx, sy * sy, 1.0]
                 x = sum(float(cx[i]) * feats[i] for i in range(6))
                 y = sum(float(cy[i]) * feats[i] for i in range(6))
+                return x, y
+            except Exception:
+                pass
+
+        # Linear fit (3-5 samples)
+        if model == "linear_sxsy":
+            try:
+                cx = p["x"]  # list of 3 coeffs
+                cy = p["y"]  # list of 3 coeffs
+                feats = [sx, sy, 1.0]
+                x = sum(float(cx[i]) * feats[i] for i in range(3))
+                y = sum(float(cy[i]) * feats[i] for i in range(3))
                 return x, y
             except Exception:
                 pass
