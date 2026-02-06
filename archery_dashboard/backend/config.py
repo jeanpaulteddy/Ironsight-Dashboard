@@ -35,6 +35,6 @@ CAMERA_MJPEG_PORT = 8081
 TDOA_ENABLED = True                # Enable TDOA-based localization
 TDOA_WAVE_SPEED = 100.0            # Wave propagation speed in straw target (m/s)
 TDOA_WEIGHT = 0.5                  # Blend weight: 0.0 = pure energy, 1.0 = pure TDOA
-TARGET_DIAMETER_M = 1.30           # Target diameter in meters (130cm)
+TARGET_DIAMETER_M = 1.26           # Sensor span in meters (2 * 63cm from center)
 HIT_LOG_ENABLED = True             # Enable CSV logging of all arrow hits
 HIT_LOG_DIR = "data/logs"          # Directory for hit logs

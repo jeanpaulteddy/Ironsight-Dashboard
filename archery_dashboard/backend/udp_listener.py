@@ -10,9 +10,9 @@ try:
 except Exception:
     default_get_mode = None
 
-# Keep consistent with your current geometry idea
-D_M = 1.0
-HALF_SPAN = D_M / 2.0
+# Target geometry: sensors are 63cm from center (N, W, S, E positions)
+D_M = 1.26  # diameter = 2 * 0.63m
+HALF_SPAN = D_M / 2.0  # 0.63m - distance from center to sensor
 
 def extract_compass_peaks(msg: Dict[str, Any], ch2comp: Dict[str, str]) -> Dict[str, float]:
     ch = msg.get("ch", {})
@@ -37,7 +37,7 @@ def features_from_peaks(pN: float, pE: float, pW: float, pS: float):
 # Observed: ~12000µs max timing diff across 1.3m target → ~100 m/s
 TDOA_WAVE_SPEED = 100.0
 TDOA_ENABLED = True
-TARGET_DIAMETER_M = 1.30  # Target diameter in meters
+TARGET_DIAMETER_M = 1.26  # Sensor span = 2 * 63cm
 
 def tdoa_localize(tdoa_us: Dict[str, int], ch2comp: Dict[str, str], wave_speed: float = TDOA_WAVE_SPEED):
     """

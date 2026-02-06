@@ -611,3 +611,31 @@ def cal_apply():
         pass
 
     return {"ok": True, "applied": True, "fit": calibration_fit, "mode": get_mode()}
+
+
+@app.post("/api/calibration/reset")
+def cal_reset():
+    """Reset calibration to start fresh - clears fit and all samples."""
+    global calibration_fit, calibration_fit_version
+
+    # Clear the active fit
+    calibration_fit = None
+    calibration_fit_version = 0
+
+    # Delete the saved fit file
+    if os.path.exists(CAL_FIT_PATH):
+        try:
+            os.remove(CAL_FIT_PATH)
+            print("[CAL] Deleted calibration_fit.json")
+        except Exception as e:
+            print(f"[CAL] Failed to delete fit file: {e}")
+
+    # Clear all calibration state
+    calibration["samples"] = []
+    calibration["fit"] = None
+    calibration["pending"] = None
+    calibration["active"] = False
+    calibration["paused"] = False
+
+    print("[CAL] *** CALIBRATION RESET - starting fresh ***")
+    return {"ok": True, "message": "Calibration reset. No fit active - raw sx/sy will be used."}
