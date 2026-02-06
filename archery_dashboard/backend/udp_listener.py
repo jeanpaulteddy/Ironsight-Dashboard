@@ -34,9 +34,11 @@ def features_from_peaks(pN: float, pE: float, pW: float, pS: float):
 
 # ---------- TDOA LOCALIZATION ----------
 # Wave speed in straw target (m/s) - tune based on actual measurements
-TDOA_WAVE_SPEED = 150.0
+# Observed: ~12000µs max timing diff across 1.3m target → ~100 m/s
+TDOA_WAVE_SPEED = 100.0
 TDOA_WEIGHT = 0.5  # 0.0 = pure energy, 1.0 = pure TDOA
 TDOA_ENABLED = True
+TARGET_DIAMETER_M = 1.30  # Target diameter in meters
 
 def tdoa_localize(tdoa_us: Dict[str, int], ch2comp: Dict[str, str], wave_speed: float = TDOA_WAVE_SPEED):
     """
@@ -74,8 +76,8 @@ def tdoa_localize(tdoa_us: Dict[str, int], ch2comp: Dict[str, str], wave_speed: 
     dy = dN - dS  # positive = impact closer to South
 
     # Normalize to [-1, 1] range
-    # Assume max distance difference is ~0.5m (half target width)
-    max_diff = 0.5
+    # Max distance difference = target diameter (sensors on opposite edges)
+    max_diff = TARGET_DIAMETER_M
     sx = -dx / max_diff  # flip sign for coordinate system
     sy = -dy / max_diff
 

@@ -72,6 +72,7 @@ last_debug_ping = 0
 # TDOA interrupt state
 int_timestamps = {}  # {channel: timestamp_us}
 int_pins = {}        # {channel: Pin object}
+tdoa_snapshot = {}   # Snapshot of timestamps at trigger time
 
 # ---------- I2C AUTO-DISCOVERY ----------
 MUX_ADDRS = [0x70,0x71,0x72,0x73,0x74,0x75,0x76,0x77]
@@ -312,15 +313,15 @@ def build_bundle(now):
             "samples": int(sum_samples.get(ch, 0)),
             "x": x, "y": y, "z": z,
             "thr": round(snapshot_thr.get(ch,0.0),1),
-            "int_us": int_timestamps.get(ch, 0)  # Raw interrupt timestamp
+            "int_us": tdoa_snapshot.get(ch, 0)  # Raw interrupt timestamp from snapshot
         }
 
     # Compute relative TDOA (reference to first interrupt)
     tdoa = {}
-    if int_timestamps:
-        t0 = min(int_timestamps.values())
+    if tdoa_snapshot:
+        t0 = min(tdoa_snapshot.values())
         for ch in CHANNELS:
-            tdoa[str(ch)] = int_timestamps.get(ch, t0) - t0
+            tdoa[str(ch)] = tdoa_snapshot.get(ch, t0) - t0
 
     return {
         "type":"hit_bundle","node":NODE_ID,"seq":seq,"t_ms":now,
@@ -416,9 +417,6 @@ def main_loop():
                 send_bundle(build_bundle(now))
                 seq += 1
 
-                # Clear interrupts for next event
-                clear_interrupts()
-
                 in_event = False; in_refract = True; armed = False
                 refract_until = time.ticks_add(now, REFRACT_MS)
 
@@ -442,10 +440,16 @@ def main_loop():
             last_over_ts = now
 
         if trig is not None:
-            # Wait briefly for all interrupts to fire (wave propagation across target)
+            global tdoa_snapshot
+            # Capture TDOA timestamps immediately (they should already be set from interrupts)
+            # Then wait briefly for any remaining sensors to fire
             if TDOA_ENABLED:
                 time.sleep_ms(10)  # Max expected wave propagation time
-            print("TRIG", now, "ch", trig, "mag", magv.get(trig), "tdoa", int_timestamps)
+                tdoa_snapshot = dict(int_timestamps)  # Snapshot the timestamps
+                clear_interrupts()  # Clear for accurate timing on next event
+            else:
+                tdoa_snapshot = {}
+            print("TRIG", now, "ch", trig, "mag", magv.get(trig), "tdoa", tdoa_snapshot)
             in_event = True; first_ch = trig; event_start_ms = now
             snapshot_thr = {c: thr_now.get(c, 0.0) for c in CHANNELS}
             peak_mag = {c: magv.get(c, 0.0) for c in CHANNELS}
@@ -457,6 +461,10 @@ def main_loop():
 
         for ch in magv:
             update_baseline(ch, magv[ch])
+
+        # Clear stale interrupts during idle (prevents old timestamps from persisting)
+        if TDOA_ENABLED and int_timestamps:
+            clear_interrupts()
 
         time.sleep_ms(dt)
 
