@@ -14,7 +14,7 @@ DEBUG_PINGS  = False
 
 ODR_HZ       = 400   # Loop rate (actual I2C limits this)
 ADXL_ODR     = 0x0F  # ADXL345 internal ODR: 3200 Hz for TDOA precision
-EVENT_MS     = 120
+TRIGGER_TIMEOUT_MS = 15  # Max wait for all channels after first INT
 REFRACT_MS   = 500
 
 K_SIGMA      = 6.0
@@ -61,9 +61,9 @@ TDOA_ENABLED = True  # Feature flag for easy disable
 
 # ---------- RUNTIME STATE ----------
 running_mean, running_sigma, thr_now = {}, {}, {}
-in_event = False
+in_triggered = False  # Collecting phase after first INT
 in_refract = False
-event_start_ms = 0
+trigger_start_ms = 0  # Timestamp of first INT in current trigger
 refract_until = 0
 snapshot_thr, peak_mag, peak_xyz = {}, {}, {}
 
@@ -438,11 +438,16 @@ def build_bundle(now):
         }
 
     # Compute relative TDOA (reference to first interrupt) - legacy method
+    # Channels that fired: relative time (0 = reference, >0 = later)
+    # Channels that didn't fire: -1 (sentinel value, distinguishable from 0)
     tdoa = {}
     if tdoa_snapshot:
         t0 = min(tdoa_snapshot.values())
         for ch in CHANNELS:
-            tdoa[str(ch)] = tdoa_snapshot.get(ch, t0) - t0
+            if ch in tdoa_snapshot:
+                tdoa[str(ch)] = tdoa_snapshot[ch] - t0
+            else:
+                tdoa[str(ch)] = -1  # Didn't fire
 
     # Compute interpolated peak times from waveform (new accurate method)
     peak_times = {}
@@ -454,6 +459,8 @@ def build_bundle(now):
             peak_times[ch] = find_peak_time_interpolated(samples)
 
     # Compute relative TDOA from interpolated peaks
+    # Channels with valid peaks: relative time (0 = reference, >0 = later)
+    # Channels without peaks: -1 (sentinel value)
     peak_tdoa = {}
     if peak_times:
         t0 = min(peak_times.values())
@@ -461,13 +468,13 @@ def build_bundle(now):
             if ch in peak_times:
                 peak_tdoa[str(ch)] = peak_times[ch] - t0
             else:
-                peak_tdoa[str(ch)] = 0
+                peak_tdoa[str(ch)] = -1  # No valid peak
 
     return {
         "type":"hit_bundle","node":NODE_ID,"seq":seq,"t_ms":now,
         "first":first_ch,"order":[first_ch] if first_ch is not None else [],
-        "event_ms":EVENT_MS,"refract_ms":REFRACT_MS,
-        "fw_ver":"tdoa_v3",  # Burst reads + immediate INT handling
+        "trigger_timeout_ms":TRIGGER_TIMEOUT_MS,"refract_ms":REFRACT_MS,
+        "fw_ver":"tdoa_v4",  # Immediate send after all channels read (no event mode)
         "K_SIGMA":K_SIGMA,"SIGMA_CAP":SIGMA_CAP,
         "channels": CHANNELS,
         "ch": chs,
@@ -488,10 +495,10 @@ def init_baselines(now):
     armed = False
 
 # ---------- MAIN LOOP ----------
-SAMPLE_PERIOD_US = 312  # 1/3200Hz in microseconds
+SAMPLE_PERIOD_US = 312.5  # 1/3200Hz in microseconds (exact: 1,000,000 / 3200)
 
 def main_loop():
-    global in_event, in_refract, event_start_ms, refract_until
+    global in_triggered, in_refract, trigger_start_ms, refract_until
     global snapshot_thr, peak_mag, peak_xyz, first_ch, seq
     global sum_energy, sum_energy2, sum_samples
     global armed, last_over_ts, last_debug_ping
@@ -506,7 +513,7 @@ def main_loop():
         now = time.ticks_ms()
 
         # --- Check for interrupt flags and read immediately ---
-        if TDOA_ENABLED:
+        if TDOA_ENABLED and not in_refract:
             for ch in list(int_pending.keys()):
                 if ch in channels_read:
                     continue
@@ -539,10 +546,10 @@ def main_loop():
 
                 channels_read.add(ch)
 
-                # Start event mode on first trigger
-                if not in_event:
-                    in_event = True
-                    event_start_ms = now
+                # Start triggered mode on first INT
+                if not in_triggered:
+                    in_triggered = True
+                    trigger_start_ms = now
                     first_ch = ch
                     # Initialize accumulators
                     snapshot_thr = {c: thr_now.get(c, 0.0) for c in CHANNELS}
@@ -560,32 +567,13 @@ def main_loop():
                             waveform[c] = []
                     print("TRIG", now, "ch", ch, "via INT")
 
-        if in_event:
-            # --- EVENT MODE: burst-read FIFO for dense 3200Hz waveforms ---
-            t_us = time.ticks_us()
-            for ch in CHANNELS:
-                if ch not in adxl_addr_by_ch:
-                    continue
-                try:
-                    samples = fifo_read_burst(ch)
-                except Exception:
-                    continue
-                for x, y, z in samples:
-                    m = mag3(x, y, z)
-                    if len(waveform.get(ch, [])) < MAX_WAVEFORM_SAMPLES:
-                        waveform.setdefault(ch, []).append((t_us, m))
-                    if m > peak_mag.get(ch, 0.0):
-                        peak_mag[ch] = m
-                        peak_xyz[ch] = (x, y, z)
-                    mu = running_mean.get(ch, 0.0)
-                    e = m - mu
-                    if e > 0:
-                        sum_energy[ch] = sum_energy.get(ch, 0.0) + e
-                        sum_energy2[ch] = sum_energy2.get(ch, 0.0) + (e * e)
-                    sum_samples[ch] = sum_samples.get(ch, 0) + 1
+        # --- SEND CONDITION: all channels read OR timeout ---
+        if in_triggered:
+            all_channels_read = len(channels_read) == len(CHANNELS)
+            timeout_expired = time.ticks_diff(now, trigger_start_ms) >= TRIGGER_TIMEOUT_MS
 
-            if time.ticks_diff(now, event_start_ms) >= EVENT_MS:
-                # Always send candidate bundle; Pi classifies
+            if all_channels_read or timeout_expired:
+                # Build and send bundle immediately
                 event_max_peak = 0.0
                 for c in CHANNELS:
                     pv = peak_mag.get(c, 0.0)
@@ -602,15 +590,17 @@ def main_loop():
                     t0 = min(tdoa_snapshot.values())
                     rel = {ch: tdoa_snapshot[ch] - t0 for ch in tdoa_snapshot}
                     first_int = min(tdoa_snapshot, key=tdoa_snapshot.get)
-                    print("TDOA: fired={} missing={} first_int=ch{} rel_us={}".format(
-                        fired, missing, first_int, rel))
+                    reason = "all_read" if all_channels_read else "timeout"
+                    print("TDOA: fired={} missing={} first_int=ch{} rel_us={} reason={}".format(
+                        fired, missing, first_int, rel, reason))
 
-                print("SEND", now, "seq", seq, "maxPeak", event_max_peak, "sumE2", e2_sum)
+                print("SEND", now, "seq", seq, "maxPeak", event_max_peak, "sumE2", e2_sum,
+                      "latency_ms", time.ticks_diff(now, trigger_start_ms))
                 send_bundle(build_bundle(now))
                 seq += 1
 
-                # Reset state
-                in_event = False
+                # Reset state -> enter refractory period
+                in_triggered = False
                 in_refract = True
                 armed = False
                 refract_until = time.ticks_add(now, REFRACT_MS)
@@ -619,7 +609,8 @@ def main_loop():
                 tdoa_snapshot = {}
                 waveform = {ch: [] for ch in CHANNELS}
                 clear_interrupts()
-        else:
+
+        elif not in_refract:
             # --- IDLE MODE: flush FIFO, use latest sample for baseline/trigger ---
             xyz, magv = {}, {}
             for ch in CHANNELS:
@@ -638,9 +629,6 @@ def main_loop():
 
             if not magv:
                 pass
-            elif in_refract:
-                if time.ticks_diff(refract_until, now) <= 0:
-                    in_refract = False
             elif time.ticks_diff(now, warmup_until) < 0:
                 for ch in magv: update_baseline(ch, magv[ch], warmup=True)
             else:
@@ -668,11 +656,11 @@ def main_loop():
                     # Software trigger fallback (when no INT fired yet)
                     # The interrupt-based path above will handle most triggers;
                     # this is a backup for sensors without working INT1 lines
-                    if not in_event:
+                    if not in_triggered:
                         print("TRIG", now, "ch", trig, "mag", magv.get(trig), "(software)")
-                        in_event = True
+                        in_triggered = True
                         first_ch = trig
-                        event_start_ms = now
+                        trigger_start_ms = now
                         snapshot_thr = {c: thr_now.get(c, 0.0) for c in CHANNELS}
                         peak_mag = {c: magv.get(c, 0.0) for c in CHANNELS}
                         peak_xyz = {c: xyz.get(c, (0, 0, 0)) for c in CHANNELS}
@@ -687,6 +675,11 @@ def main_loop():
                     # Clear stale interrupts during idle (prevents old timestamps from persisting)
                     if TDOA_ENABLED and int_pending:
                         clear_interrupts()
+
+        else:
+            # --- REFRACTORY MODE: just wait ---
+            if time.ticks_diff(refract_until, now) <= 0:
+                in_refract = False
 
         # Adaptive sleep: only sleep remaining time to hit target loop period
         elapsed_us = time.ticks_diff(time.ticks_us(), loop_start_us)
