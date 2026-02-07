@@ -197,26 +197,19 @@ HIT_LOG_ENABLED = True
 
 # CSV column headers - comprehensive for analysis
 CSV_HEADERS = [
-    # Identifiers
-    "date", "timestamp", "seq", "node", "session_id",
-    # Mode: "shooting" or "calibration"
-    "mode",
-    # Software estimated position (fused)
-    "x_est", "y_est", "sx", "sy",
-    # Ground truth (only filled during calibration confirmation)
-    "x_gt", "y_gt",
-    # Fusion details
-    "fusion_method", "energy_conf", "tdoa_conf",
-    # Energy features
-    "sx_energy", "sy_energy",
-    "total_energy", "max_peak", "dom_ratio",
-    # TDOA features
-    "sx_tdoa", "sy_tdoa",
-    "tdoa_N_us", "tdoa_W_us", "tdoa_S_us", "tdoa_E_us",
-    # Per-channel energy
-    "energy_N", "energy_W", "energy_S", "energy_E",
-    # Classification
-    "label", "score"
+    "date", "time", "seq", "node", "session_id",
+    "mode(shooting|calibration)",
+    "estimated_x_cm", "estimated_y_cm",
+    "fused_sx(-1to1)", "fused_sy(-1to1)",
+    "clicked_x_cm(cal_only)", "clicked_y_cm(cal_only)",
+    "fusion_method", "energy_confidence(0to1)", "tdoa_confidence(0to1)",
+    "energy_sx(-1to1)", "energy_sy(-1to1)",
+    "total_energy(sumE2)", "max_peak(raw_accel)", "dominant_ratio(0to1)",
+    "tdoa_sx(-1to1)", "tdoa_sy(-1to1)",
+    "tdoa_N_microsec(vs_first)", "tdoa_W_microsec(vs_first)",
+    "tdoa_S_microsec(vs_first)", "tdoa_E_microsec(vs_first)",
+    "energy_N(sumE2)", "energy_W(sumE2)", "energy_S(sumE2)", "energy_E(sumE2)",
+    "label(hit|reject)", "classifier_score",
 ]
 
 def get_log_file_for_date(date_str: str = None) -> Path:
@@ -266,30 +259,30 @@ def log_hit(evt: Dict[str, Any], mode: str = "shooting", session_id: str = ""):
                 # Mode
                 mode,
                 # Software estimated position
-                round(evt.get("x_m", 0), 4),
-                round(evt.get("y_m", 0), 4),
-                round(evt.get("sx", 0), 4),
-                round(evt.get("sy", 0), 4),
+                round(evt.get("x_m", 0), 1),
+                round(evt.get("y_m", 0), 1),
+                round(evt.get("sx", 0), 3),
+                round(evt.get("sy", 0), 3),
                 # Ground truth (empty for shooting, filled by calibration)
-                evt.get("x_gt", ""),
-                evt.get("y_gt", ""),
+                round(evt.get("x_gt"), 1) if evt.get("x_gt") != "" and evt.get("x_gt") is not None else "",
+                round(evt.get("y_gt"), 1) if evt.get("y_gt") != "" and evt.get("y_gt") is not None else "",
                 # Fusion details
                 evt.get("fusion_method", ""),
                 round(evt.get("energy_conf", 0), 3),
                 round(evt.get("tdoa_conf", 0), 3),
                 # Energy features
-                round(evt.get("sx_energy", 0), 4),
-                round(evt.get("sy_energy", 0), 4),
+                round(evt.get("sx_energy", 0), 3),
+                round(evt.get("sy_energy", 0), 3),
                 round(evt.get("total_energy", 0), 1),
                 round(evt.get("max_peak", 0), 1),
                 round(evt.get("dom_ratio", 0), 4),
                 # TDOA features
-                round(evt.get("sx_tdoa", 0) or 0, 4),
-                round(evt.get("sy_tdoa", 0) or 0, 4),
-                evt.get("tdoa_N_us", 0),
-                evt.get("tdoa_W_us", 0),
-                evt.get("tdoa_S_us", 0),
-                evt.get("tdoa_E_us", 0),
+                round(evt.get("sx_tdoa", 0) or 0, 3),
+                round(evt.get("sy_tdoa", 0) or 0, 3),
+                round(evt.get("tdoa_N_us", 0), 1),
+                round(evt.get("tdoa_W_us", 0), 1),
+                round(evt.get("tdoa_S_us", 0), 1),
+                round(evt.get("tdoa_E_us", 0), 1),
                 # Per-channel energy
                 round(evt.get("energy_N", 0), 1),
                 round(evt.get("energy_W", 0), 1),
@@ -552,7 +545,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
         elif getattr(self, "use_dom_gate", False) and (max_energy < getattr(self, "min_max_energy", 0.0)):
             label = "GHOST"
             reason = f"maxE<{self.min_max_energy:.1f}"
-        elif getattr(self, "use_dom_gate", False) and (dom_ratio < getattr(self, "min_dom_ratio", 0.0)):
+        elif getattr(self, "use_dom_gate", False) and (dom_ratio < getattr(self, "min_dom_ratio", 0.0)) and energy < 10000.0:
             label = "GHOST"
             reason = f"dom<{self.min_dom_ratio:.2f}"
         else:
@@ -571,6 +564,9 @@ class UDPProtocol(asyncio.DatagramProtocol):
             elif (max_peak < 320.0) and (energy < 2000.0):
                 label = "GHOST"
                 reason = f"weak_signal(peak={max_peak:.0f}<320 & sumE2={energy:.0f}<2000)"
+            elif is_cal and energy < 5000.0:
+                label = "GHOST"
+                reason = f"cal_low_energy(sumE2={energy:.0f}<5000)"
             else:
                 # Calibration-specific hard requirement
                 if is_cal and not ((max_peak >= 320.0) or (energy >= 300.0)):
@@ -654,6 +650,11 @@ class UDPProtocol(asyncio.DatagramProtocol):
                             label, reason = "HIT", f"C(sumE2>={self.sumE2_C:.0f},peak>={self.peak_C:.0f},dom>={self.dom_C:.2f})"
                         else:
                             label, reason = "GHOST", "not_arrow"
+
+        # Low-energy override: reject peak-only false positives
+        if label == "HIT" and energy < self.score_sumE2_3 and score < thresh + 5:
+            label = "GHOST"
+            reason = f"low_energy_override(sumE2={energy:.0f}<{self.score_sumE2_3:.0f},score={score})"
 
         # Print everything above a floor to avoid spam
         if getattr(self, "debug_print", False) and energy >= getattr(self, "ghost_floor", 0.0):
