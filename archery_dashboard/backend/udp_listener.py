@@ -221,6 +221,7 @@ CSV_HEADERS = [
     "tdoa_N_microsec(vs_first)", "tdoa_W_microsec(vs_first)",
     "tdoa_S_microsec(vs_first)", "tdoa_E_microsec(vs_first)",
     "energy_N(sumE2)", "energy_W(sumE2)", "energy_S(sumE2)", "energy_E(sumE2)",
+    "peak_N", "peak_W", "peak_S", "peak_E",
     "label(hit|reject)", "classifier_score",
 ]
 
@@ -301,6 +302,11 @@ def log_hit(evt: Dict[str, Any], mode: str = "shooting", session_id: str = ""):
                 round(evt.get("energy_W", 0), 1),
                 round(evt.get("energy_S", 0), 1),
                 round(evt.get("energy_E", 0), 1),
+                # Per-channel peaks
+                round(evt.get("peak_N", 0), 1),
+                round(evt.get("peak_W", 0), 1),
+                round(evt.get("peak_S", 0), 1),
+                round(evt.get("peak_E", 0), 1),
                 # Classification
                 evt.get("label", ""),
                 evt.get("score", 0)
@@ -817,6 +823,8 @@ class UDPProtocol(asyncio.DatagramProtocol):
         }
 
         # Log hit to CSV (with extended data for analysis)
+        # Build reverse mapping from compass to channel for peak lookup
+        comp_to_ch = {v: k for k, v in self.ch2comp.items()}
         log_evt = {
             "seq": seq,
             "node": node,
@@ -846,6 +854,11 @@ class UDPProtocol(asyncio.DatagramProtocol):
             "energy_W": comp["W"],
             "energy_S": comp["S"],
             "energy_E": comp["E"],
+            # Per-channel peaks (map channel to compass)
+            "peak_N": ch_peak.get(comp_to_ch.get("N", ""), 0),
+            "peak_W": ch_peak.get(comp_to_ch.get("W", ""), 0),
+            "peak_S": ch_peak.get(comp_to_ch.get("S", ""), 0),
+            "peak_E": ch_peak.get(comp_to_ch.get("E", ""), 0),
             # Classification
             "label": label,
             "score": score,
