@@ -75,6 +75,9 @@ def get_fit():
     # return the currently active calibration fit (or None)
     return calibration_fit
 
+def get_cal_active() -> bool:
+    return calibration.get("active", False)
+
 def get_mode() -> str:
     with _mode_lock:
         return _mode
@@ -154,7 +157,7 @@ async def startup():
                 print("[CAL] loaded fit from disk:", calibration_fit)
     except Exception:
         calibration_fit = None
-    asyncio.create_task(udp_loop(config.UDP_HOST, config.UDP_PORT, queue, CH2COMP, get_mode, fit_getter=get_fit))
+    asyncio.create_task(udp_loop(config.UDP_HOST, config.UDP_PORT, queue, CH2COMP, get_mode, fit_getter=get_fit, cal_getter=get_cal_active))
     asyncio.create_task(dispatch_loop())
 
 @app.on_event("startup")
@@ -537,12 +540,16 @@ async def get_session_stats(session_id: int):
 
 @app.post("/api/calibration/start")
 def cal_start():
+    global calibration_fit
     calibration["active"] = True
     calibration["paused"] = False
     calibration["pending"] = None
     calibration["samples"] = []
     calibration["session_id"] = f"cal_{int(time.time())}"  # Unique session ID for CSV grouping
     calibration.pop("fit", None)
+    # Clear active fit so calibration uses raw sx/sy (prevents compounding errors from old bad fit)
+    calibration_fit = None
+    print("[CAL] Cleared active fit for fresh calibration")
     return {"ok": True, "active": True, "session_id": calibration["session_id"]}
 
 @app.post("/api/calibration/pause")

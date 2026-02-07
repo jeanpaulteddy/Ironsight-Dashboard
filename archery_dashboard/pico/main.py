@@ -15,16 +15,16 @@ DEBUG_PINGS  = False
 ODR_HZ       = 400   # Loop rate (actual I2C limits this)
 ADXL_ODR     = 0x0F  # ADXL345 internal ODR: 3200 Hz for TDOA precision
 EVENT_MS     = 120
-REFRACT_MS   = 250
+REFRACT_MS   = 500
 
-K_SIGMA      = 4.0
+K_SIGMA      = 6.0
 SIGMA_CAP    = 20.0
 ALPHA_MEAN   = 0.02
 ALPHA_SIGMA  = 0.02
 
 WARMUP_MS        = 8000
 QUIET_ARM_MS     = 400     # was 1500; shorter since Pi now classifies
-MIN_MAG          = 260.0
+MIN_MAG          = 350.0
 CONSEC_REQUIRED  = 1
 
 I2C_BUS_ID   = 0
@@ -49,7 +49,7 @@ REG_INT_SOURCE    = 0x30  # Interrupt source (read to clear)
 # Activity threshold for TDOA interrupts (62.5mg per LSB)
 # 8 = 500mg, 16 = 1g, 32 = 2g, 48 = 3g
 # Higher = less sensitive to vibration, but still catches arrow impacts
-ACTIVITY_THRESHOLD = 48
+ACTIVITY_THRESHOLD = 80
 TDOA_ENABLED = True  # Feature flag for easy disable
 
 # ---------- RUNTIME STATE ----------
@@ -213,7 +213,7 @@ def detect_adxl_addr(ch):
 
 def init_adxl345(ch, addr):
     adxl_write(ch, addr, 0x2D, 0x00); time.sleep_ms(2)  # standby
-    adxl_write(ch, addr, 0x31, 0x08)                  # full-res ±2g
+    adxl_write(ch, addr, 0x31, 0x09)                  # full-res ±4g (prevents clipping on 38lb recurve impacts)
     adxl_write(ch, addr, 0x2C, ADXL_ODR)              # 3200 Hz ODR for TDOA precision
 
     # Configure activity interrupt for TDOA

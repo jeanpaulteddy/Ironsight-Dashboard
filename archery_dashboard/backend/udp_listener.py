@@ -80,25 +80,32 @@ def tdoa_localize(tdoa_us: Dict[str, int], ch2comp: Dict[str, str], wave_speed: 
     sx = -dx / max_diff  # flip sign for coordinate system
     sy = -dy / max_diff
 
-    # Compute TDOA confidence based on timing spread
-    # Good TDOA: clear timing differences, not all zeros, not all same
+    # Compute TDOA confidence based on timing spread and channel quality
     times = list(tdoa_comp.values())
     max_time = max(times)
     min_time = min(times)
     spread = max_time - min_time  # microseconds
 
-    # Expected spread for edge hits: ~13000µs (1.3m / 100m/s)
-    # Center hits: smaller spread
-    # Confidence based on having reasonable spread (not 0, not impossibly large)
+    # Count channels at the minimum arrival time (simultaneous = unreliable)
+    n_at_zero = sum(1 for t in times if t == min_time)
+
     expected_max_spread = (TARGET_DIAMETER_CM / 100.0) / wave_speed * 1e6  # ~13000µs
 
-    if spread < 100:  # All sensors fired nearly simultaneously - suspicious
-        confidence = 0.2
-    elif spread > expected_max_spread * 1.5:  # Spread too large - timing error
-        confidence = 0.3
+    if n_at_zero >= 3:
+        # 3+ channels at same time: broad wavefront, only 1 useful timing channel
+        confidence = 0.05
+    elif n_at_zero == 2:
+        # 2 channels at zero: only moderately useful
+        confidence = 0.15
+    elif spread < 100:  # All sensors nearly simultaneous
+        confidence = 0.1
+    elif spread > expected_max_spread * 1.5:  # Physically impossible spread
+        confidence = 0.0
+    elif spread > expected_max_spread:  # Slightly over expected
+        confidence = 0.15
     else:
-        # Good spread range - higher confidence
-        confidence = min(1.0, 0.5 + (spread / expected_max_spread) * 0.5)
+        # Good spread range — cap at 0.7 so TDOA never fully overrides energy
+        confidence = min(0.7, 0.3 + (spread / expected_max_spread) * 0.4)
 
     # Clamp to valid range
     sx = max(-1.0, min(1.0, sx))
@@ -134,6 +141,7 @@ def fuse_localization(sx_energy: float, sy_energy: float, energy_conf: float,
                       sx_tdoa: Optional[float], sy_tdoa: Optional[float], tdoa_conf: float) -> tuple:
     """
     Intelligent fusion of energy and TDOA localization.
+    Energy is preferred — TDOA on this hardware is not reliable enough to override.
 
     Returns (sx, sy, method_used) where method_used describes the fusion.
     """
@@ -141,7 +149,9 @@ def fuse_localization(sx_energy: float, sy_energy: float, energy_conf: float,
     if sx_tdoa is None or sy_tdoa is None:
         return sx_energy, sy_energy, "energy_only"
 
-    # Both methods available - fuse based on confidence and agreement
+    # Apply TDOA trust factor: energy is generally more reliable on this hardware
+    TDOA_TRUST_FACTOR = 0.5
+    tdoa_conf_eff = tdoa_conf * TDOA_TRUST_FACTOR
 
     # Check agreement between methods
     dx = abs(sx_energy - sx_tdoa)
@@ -149,13 +159,13 @@ def fuse_localization(sx_energy: float, sy_energy: float, energy_conf: float,
     disagreement = math.sqrt(dx*dx + dy*dy)
 
     # Normalize confidence weights
-    total_conf = energy_conf + tdoa_conf
+    total_conf = energy_conf + tdoa_conf_eff
     if total_conf < 0.1:
         # Both low confidence - average them
         return (sx_energy + sx_tdoa) / 2, (sy_energy + sy_tdoa) / 2, "low_conf_avg"
 
     w_energy = energy_conf / total_conf
-    w_tdoa = tdoa_conf / total_conf
+    w_tdoa = tdoa_conf_eff / total_conf
 
     if disagreement < 0.2:
         # Methods agree well - weighted average
@@ -165,7 +175,6 @@ def fuse_localization(sx_energy: float, sy_energy: float, energy_conf: float,
 
     elif disagreement < 0.5:
         # Moderate disagreement - trust higher confidence more
-        # But also consider that disagreement reduces overall confidence
         penalty = 1.0 - (disagreement - 0.2) / 0.3 * 0.3  # 0-30% penalty
         w_energy *= penalty
         w_tdoa *= penalty
@@ -178,11 +187,9 @@ def fuse_localization(sx_energy: float, sy_energy: float, energy_conf: float,
         return sx, sy, f"disagree_fuse(e={w_energy:.2f},t={w_tdoa:.2f})"
 
     else:
-        # High disagreement - pick the higher confidence method
-        if energy_conf >= tdoa_conf:
-            return sx_energy, sy_energy, f"high_disagree_energy(conf={energy_conf:.2f})"
-        else:
-            return sx_tdoa, sy_tdoa, f"high_disagree_tdoa(conf={tdoa_conf:.2f})"
+        # High disagreement: always prefer energy. TDOA on this hardware
+        # is not reliable enough to override when methods strongly disagree.
+        return sx_energy, sy_energy, f"high_disagree_energy(e_conf={energy_conf:.2f},t_conf={tdoa_conf:.2f})"
 
 # ---------- CSV HIT LOGGING ----------
 HIT_LOG_DIR = Path(__file__).parent / "data" / "logs"
@@ -351,12 +358,13 @@ def xy_from_features(sx: float, sy: float, fit):
     return x, y
 
 class UDPProtocol(asyncio.DatagramProtocol):
-    def __init__(self, queue: asyncio.Queue, ch2comp: Dict[str, str], mode_getter: Optional[Callable[[], str]] = None, fit_getter: Optional[Callable[[], Any]] = None):
+    def __init__(self, queue: asyncio.Queue, ch2comp: Dict[str, str], mode_getter: Optional[Callable[[], str]] = None, fit_getter: Optional[Callable[[], Any]] = None, cal_getter: Optional[Callable[[], bool]] = None):
         self.queue = queue
         self.ch2comp = ch2comp
         # If a mode getter isn't provided, fall back to mode_state.get_mode (if available)
         self.mode_getter = mode_getter or default_get_mode
         self.fit_getter = fit_getter
+        self.cal_getter = cal_getter
         self._last_accept_ts = 0.0
 
         # duplicate-suppression window (shorter so real consecutive arrows don't get dropped)
@@ -391,19 +399,27 @@ class UDPProtocol(asyncio.DatagramProtocol):
         self.use_score_classifier = True
 
         # Score thresholds (tune): calibration should be stricter.
-        self.score_thresh_shooting = 7
-        self.score_thresh_calibration = 9
+        self.score_thresh_shooting = 10
+        self.score_thresh_calibration = 13
 
-        # Feature thresholds for scoring
-        self.score_sumE2_1 = 300.0
-        self.score_sumE2_2 = 600.0
-        self.score_peak_1 = 320.0
-        self.score_peak_2 = 360.0
+        # Feature thresholds for scoring (tuned for 38lb recurve)
+        # Energy tiers: noise tops out ~400, real hits are 100k+
+        self.score_sumE2_1 = 500.0
+        self.score_sumE2_2 = 1000.0
+        self.score_sumE2_3 = 5000.0   # strong impact evidence
+        # Peak tiers: noise peaks ~290, real hits 500+
+        self.score_peak_1 = 350.0
+        self.score_peak_2 = 500.0
+        self.score_peak_3 = 700.0     # unmistakable impact
+        # Dominance tiers (unchanged, work well)
         self.score_dom_1 = 0.45
         self.score_dom_2 = 0.60
         self.score_peak_over = 25.0
         self.score_entropy_max = 1.00
         self.score_top2_ratio = 0.75
+        # EMA delta scoring: real hits spike +100k, noise is flat/negative
+        self.score_delta_1 = 1000.0
+        self.score_delta_2 = 10000.0
 
         # If True, we will still allow legacy A/B/C as a fallback when score classifier is off.
         self.use_legacy_abc = True
@@ -507,7 +523,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
         # Determine mode early (calibration can be stricter)
         mode = self.mode_getter() if self.mode_getter else None
         mode_s = str(mode).strip().lower() if mode is not None else ""
-        is_cal = mode_s in {"calibration", "calibrating"}
+        is_cal = self.cal_getter() if self.cal_getter else False
 
         # EMA baseline (keep previous for delta explanation)
         ema_prev = self._energy_ema
@@ -552,6 +568,9 @@ class UDPProtocol(asyncio.DatagramProtocol):
             elif not has_impact:
                 label = "GHOST"
                 reason = "no_impact(sumE2<300 & peak<300 & pOver<10)"
+            elif (max_peak < 320.0) and (energy < 2000.0):
+                label = "GHOST"
+                reason = f"weak_signal(peak={max_peak:.0f}<320 & sumE2={energy:.0f}<2000)"
             else:
                 # Calibration-specific hard requirement
                 if is_cal and not ((max_peak >= 320.0) or (energy >= 300.0)):
@@ -562,20 +581,29 @@ class UDPProtocol(asyncio.DatagramProtocol):
                     score = 0
                     why = []
 
+                    # Energy tiers
                     if energy >= self.score_sumE2_1:
                         score += 2
                         why.append(f"sumE2>={self.score_sumE2_1:.0f}(+2)")
                     if energy >= self.score_sumE2_2:
                         score += 3
                         why.append(f"sumE2>={self.score_sumE2_2:.0f}(+3)")
+                    if energy >= self.score_sumE2_3:
+                        score += 3
+                        why.append(f"sumE2>={self.score_sumE2_3:.0f}(+3)")
 
+                    # Peak tiers
                     if max_peak >= self.score_peak_1:
                         score += 2
                         why.append(f"peak>={self.score_peak_1:.0f}(+2)")
                     if max_peak >= self.score_peak_2:
                         score += 3
                         why.append(f"peak>={self.score_peak_2:.0f}(+3)")
+                    if max_peak >= self.score_peak_3:
+                        score += 2
+                        why.append(f"peak>={self.score_peak_3:.0f}(+2)")
 
+                    # Dominance tiers
                     if dom_ratio >= self.score_dom_1:
                         score += 2
                         why.append(f"dom>={self.score_dom_1:.2f}(+2)")
@@ -594,6 +622,14 @@ class UDPProtocol(asyncio.DatagramProtocol):
                     if top2_ratio >= self.score_top2_ratio:
                         score += 2
                         why.append(f"top2>={self.score_top2_ratio:.2f}(+2)")
+
+                    # EMA delta tiers (real hits spike massively above baseline)
+                    if delta >= self.score_delta_1:
+                        score += 2
+                        why.append(f"delta>={self.score_delta_1:.0f}(+2)")
+                    if delta >= self.score_delta_2:
+                        score += 3
+                        why.append(f"delta>={self.score_delta_2:.0f}(+3)")
 
                     thresh = self.score_thresh_calibration if is_cal else self.score_thresh_shooting
 
@@ -632,15 +668,15 @@ class UDPProtocol(asyncio.DatagramProtocol):
             return
 
         # Mode check (accept in shooting + calibration modes)
-        if mode is None:
+        if mode is None and not is_cal:
             if getattr(self, "debug_print", False):
-                print("[DROP_MODE] mode=None (mode_getter returned None)")
+                print("[DROP_MODE] mode=None and not calibrating")
             return
 
-        allowed = {"shooting", "calibration", "calibrating"}
-        if mode_s not in allowed:
+        allowed = {"shooting", "scoring"}
+        if mode_s not in allowed and not is_cal:
             if getattr(self, "debug_print", False) and energy >= getattr(self, "ghost_floor", 0.0):
-                print(f"[DROP_MODE] mode={mode!r}")
+                print(f"[DROP_MODE] mode={mode!r}, is_cal={is_cal}")
             return
 
         # Cooldown (avoid duplicates)
@@ -673,17 +709,16 @@ class UDPProtocol(asyncio.DatagramProtocol):
 
         # If an axis has almost no energy, its ratio is dominated by noise.
         # Blend that axis ratio toward 0 (center) instead of letting it swing wildly.
-        # These defaults are conservative; adjust after a few test runs.
-        x_floor_ratio = 0.18
-        y_floor_ratio = 0.18
+        x_floor_ratio = 0.10
+        y_floor_ratio = 0.10
 
         def _blend_to_zero(v: float, frac: float, floor: float) -> float:
             if frac <= 0.0:
                 return 0.0
             if frac >= floor:
                 return max(-1.0, min(1.0, v))
-            # Linear blend from 0 at frac=0 to full at frac=floor
-            w = frac / floor
+            # Sqrt blend: preserves more signal at intermediate fractions than linear
+            w = math.sqrt(frac / floor)
             return max(-1.0, min(1.0, v * w))
 
         sx_energy = _blend_to_zero(sx_raw, x_frac, x_floor_ratio)
@@ -808,10 +843,10 @@ class UDPProtocol(asyncio.DatagramProtocol):
         except asyncio.QueueFull:
             pass
 
-async def udp_loop(host: str, port: int, queue: asyncio.Queue, ch2comp: Dict[str, str], mode_getter, fit_getter=None):
+async def udp_loop(host: str, port: int, queue: asyncio.Queue, ch2comp: Dict[str, str], mode_getter, fit_getter=None, cal_getter=None):
     loop = asyncio.get_running_loop()
     transport, _ = await loop.create_datagram_endpoint(
-        lambda: UDPProtocol(queue, ch2comp, mode_getter=mode_getter, fit_getter=fit_getter),
+        lambda: UDPProtocol(queue, ch2comp, mode_getter=mode_getter, fit_getter=fit_getter, cal_getter=cal_getter),
         local_addr=(host, port),
     )
     try:
