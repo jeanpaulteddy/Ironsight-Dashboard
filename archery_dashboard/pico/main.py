@@ -21,8 +21,10 @@ K_SIGMA      = 6.0
 SIGMA_CAP    = 20.0
 ALPHA_MEAN   = 0.02
 ALPHA_SIGMA  = 0.02
+ALPHA_MEAN_WARMUP  = 0.1   # 5x faster convergence during warmup
+ALPHA_SIGMA_WARMUP = 0.1
 
-WARMUP_MS        = 8000
+WARMUP_MS        = 4000    # Reduced from 8000 (warmup alpha 5x faster)
 QUIET_ARM_MS     = 400     # was 1500; shorter since Pi now classifies
 MIN_MAG          = 350.0
 CONSEC_REQUIRED  = 1
@@ -30,7 +32,7 @@ CONSEC_REQUIRED  = 1
 I2C_BUS_ID   = 0
 I2C_SDA_PIN  = 0
 I2C_SCL_PIN  = 1
-I2C_FREQ     = 100_000  # 100kHz (long cables limit max speed, was 50kHz)
+I2C_FREQ     = 140_000  # 140kHz (max stable with long cables, was 100kHz)
 
 TCA_ADDR     = 0x70
 ADXL_ADDRS   = [0x53, 0x1D]
@@ -45,6 +47,11 @@ REG_ACT_INACT_CTL = 0x27  # Activity control
 REG_INT_ENABLE    = 0x2E  # Interrupt enable
 REG_INT_MAP       = 0x2F  # Interrupt mapping
 REG_INT_SOURCE    = 0x30  # Interrupt source (read to clear)
+
+# ADXL345 FIFO registers
+REG_FIFO_CTL      = 0x38  # FIFO control (mode, watermark)
+REG_FIFO_STATUS   = 0x39  # FIFO status (entry count)
+FIFO_STREAM_MODE  = 0x80  # bits[7:6]=10 = stream mode, continuously overwrites oldest
 
 # Activity threshold for TDOA interrupts (62.5mg per LSB)
 # 8 = 500mg, 16 = 1g, 32 = 2g, 48 = 3g
@@ -78,7 +85,7 @@ tdoa_snapshot = {}   # Snapshot of timestamps at trigger time
 
 # Waveform buffer for peak-time TDOA (full waveform capture)
 waveform = {}        # {channel: [(time_us, magnitude), ...]}
-MAX_WAVEFORM_SAMPLES = 60  # ~120ms at 500Hz
+MAX_WAVEFORM_SAMPLES = 400  # FIFO burst-reads at 3200Hz ODR: ~384 samples in 120ms event
 
 # ---------- I2C AUTO-DISCOVERY ----------
 MUX_ADDRS = [0x70,0x71,0x72,0x73,0x74,0x75,0x76,0x77]
@@ -223,7 +230,9 @@ def init_adxl345(ch, addr):
         adxl_write(ch, addr, REG_INT_MAP, 0x00)        # Map activity to INT1
         adxl_write(ch, addr, REG_INT_ENABLE, 0x10)     # Enable activity interrupt
 
+    adxl_write(ch, addr, REG_FIFO_CTL, 0x00)           # bypass mode first (resets FIFO)
     adxl_write(ch, addr, 0x2D, 0x08)                  # measure mode
+    adxl_write(ch, addr, REG_FIFO_CTL, FIFO_STREAM_MODE)  # stream mode (keeps latest 32 samples)
 
 def read_adxl345(ch):
     addr = adxl_addr_by_ch[ch]
@@ -235,13 +244,48 @@ def read_adxl345(ch):
     x, y, z = struct.unpack('<hhh', d)
     return (x, y, z)
 
+def fifo_entry_count(ch):
+    """Read number of entries currently in FIFO (0-32)."""
+    addr = adxl_addr_by_ch[ch]
+    d = adxl_read(ch, addr, REG_FIFO_STATUS, 1)
+    return d[0] & 0x3F  # bits [5:0] = entry count
+
+def fifo_read_all(ch):
+    """Read and return all FIFO entries as list of (x, y, z) tuples.
+    Each read from 0x32 pops the oldest entry. Returns newest last."""
+    addr = adxl_addr_by_ch[ch]
+    select_mux_channel(ch)
+    count = i2c_read_mem_retry(addr, REG_FIFO_STATUS, 1)[0] & 0x3F
+    samples = []
+    for _ in range(count):
+        d = i2c_read_mem_retry(addr, 0x32, 6)
+        x, y, z = struct.unpack('<hhh', d)
+        samples.append((x, y, z))
+    return samples
+
+def fifo_flush_get_latest(ch):
+    """Flush FIFO and return only the most recent sample (x, y, z).
+    Used during idle polling to get current data, not stale."""
+    addr = adxl_addr_by_ch[ch]
+    select_mux_channel(ch)
+    count = i2c_read_mem_retry(addr, REG_FIFO_STATUS, 1)[0] & 0x3F
+    if count == 0:
+        d = i2c_read_mem_retry(addr, 0x32, 6)
+        return struct.unpack('<hhh', d)
+    # Read all, keep last (newest)
+    for _ in range(count):
+        d = i2c_read_mem_retry(addr, 0x32, 6)
+    return struct.unpack('<hhh', d)
+
 # ---------- BASELINE ----------
-def update_baseline(ch, m):
+def update_baseline(ch, m, warmup=False):
+    a_mean = ALPHA_MEAN_WARMUP if warmup else ALPHA_MEAN
+    a_sigma = ALPHA_SIGMA_WARMUP if warmup else ALPHA_SIGMA
     mu = running_mean[ch]
     sg = running_sigma[ch]
-    mu = (1-ALPHA_MEAN)*mu + ALPHA_MEAN*m
+    mu = (1-a_mean)*mu + a_mean*m
     dev = abs(m-mu)
-    sg = (1-ALPHA_SIGMA)*sg + ALPHA_SIGMA*dev
+    sg = (1-a_sigma)*sg + a_sigma*dev
     if sg > SIGMA_CAP: sg = SIGMA_CAP
     running_mean[ch], running_sigma[ch] = mu, sg
     thr_now[ch] = mu + K_SIGMA*sg
@@ -437,60 +481,37 @@ def main_loop():
 
     now0 = time.ticks_ms()
     init_baselines(now0)
-    dt = int(1000 / ODR_HZ)
+    target_us = int(1_000_000 / ODR_HZ)  # Target loop period in microseconds
 
     while True:
+        loop_start_us = time.ticks_us()
         now = time.ticks_ms()
 
-        xyz, magv = {}, {}
-        for ch in CHANNELS:
-            if ch not in adxl_addr_by_ch:
-                continue
-            try:
-                x,y,z = read_adxl345(ch)
-            except Exception:
+        if in_event:
+            # --- EVENT MODE: burst-read FIFO for dense 3200Hz waveforms ---
+            t_us = time.ticks_us()
+            for ch in CHANNELS:
+                if ch not in adxl_addr_by_ch:
+                    continue
                 try:
-                    _bitbang_bus_reset(); _reinit_i2c(); select_mux_channel(ch)
-                    x,y,z = read_adxl345(ch)
+                    samples = fifo_read_all(ch)
                 except Exception:
                     continue
-            xyz[ch] = (x,y,z)
-            magv[ch] = mag3(x,y,z)
-
-        if not magv:
-            time.sleep_ms(dt); continue
-
-        if in_refract:
-            if time.ticks_diff(refract_until, now) > 0:
-                time.sleep_ms(dt); continue
-            in_refract = False
-
-        if time.ticks_diff(now, warmup_until) < 0:
-            for ch in magv: update_baseline(ch, magv[ch])
-            time.sleep_ms(dt); continue
-        else:
-            if time.ticks_diff(now, last_over_ts) > QUIET_ARM_MS:
-                armed = True
-
-        if in_event:
-            t_us = time.ticks_us()  # Timestamp for waveform samples
-            for ch in magv:
-                # Capture waveform sample with timestamp for peak-time TDOA
-                if ch not in waveform:
-                    waveform[ch] = []
-                if len(waveform[ch]) < MAX_WAVEFORM_SAMPLES:
-                    waveform[ch].append((t_us, magv[ch]))
-
-                if magv[ch] > peak_mag.get(ch, 0.0):
-                    peak_mag[ch] = magv[ch]
-                    peak_xyz[ch] = xyz[ch]
-
-                mu = running_mean.get(ch, 0.0)
-                e = magv[ch] - mu
-                if e > 0:
-                    sum_energy[ch]  = sum_energy.get(ch, 0.0)  + e
-                    sum_energy2[ch] = sum_energy2.get(ch, 0.0) + (e * e)
-                sum_samples[ch] = sum_samples.get(ch, 0) + 1
+                for sx, sy, sz in samples:
+                    m = mag3(sx, sy, sz)
+                    if ch not in waveform:
+                        waveform[ch] = []
+                    if len(waveform[ch]) < MAX_WAVEFORM_SAMPLES:
+                        waveform[ch].append((t_us, m))
+                    if m > peak_mag.get(ch, 0.0):
+                        peak_mag[ch] = m
+                        peak_xyz[ch] = (sx, sy, sz)
+                    mu = running_mean.get(ch, 0.0)
+                    e = m - mu
+                    if e > 0:
+                        sum_energy[ch]  = sum_energy.get(ch, 0.0)  + e
+                        sum_energy2[ch] = sum_energy2.get(ch, 0.0) + (e * e)
+                    sum_samples[ch] = sum_samples.get(ch, 0) + 1
 
             if time.ticks_diff(now, event_start_ms) >= EVENT_MS:
                 # Always send candidate bundle; Pi classifies
@@ -509,68 +530,98 @@ def main_loop():
 
                 in_event = False; in_refract = True; armed = False
                 refract_until = time.ticks_add(now, REFRACT_MS)
+        else:
+            # --- IDLE MODE: flush FIFO, use latest sample for baseline/trigger ---
+            xyz, magv = {}, {}
+            for ch in CHANNELS:
+                if ch not in adxl_addr_by_ch:
+                    continue
+                try:
+                    x, y, z = fifo_flush_get_latest(ch)
+                except Exception:
+                    try:
+                        _bitbang_bus_reset(); _reinit_i2c()
+                        x, y, z = fifo_flush_get_latest(ch)
+                    except Exception:
+                        continue
+                xyz[ch] = (x, y, z)
+                magv[ch] = mag3(x, y, z)
 
-            time.sleep_ms(dt); continue
-
-        trig = None; any_over = False
-        for ch in magv:
-            mu = running_mean.get(ch, 0.0)
-            sg = running_sigma.get(ch, 0.5)
-            delta = magv[ch] - mu
-            over = (delta > (K_SIGMA * sg)) and (magv[ch] >= MIN_MAG)
-            if over:
-                any_over = True
-                consec_over[ch] = min(CONSEC_REQUIRED, consec_over.get(ch,0)+1)
-                if consec_over[ch] >= CONSEC_REQUIRED and armed:
-                    trig = ch; break
+            if not magv:
+                pass
+            elif in_refract:
+                if time.ticks_diff(refract_until, now) <= 0:
+                    in_refract = False
+            elif time.ticks_diff(now, warmup_until) < 0:
+                for ch in magv: update_baseline(ch, magv[ch], warmup=True)
             else:
-                consec_over[ch] = 0
+                if time.ticks_diff(now, last_over_ts) > QUIET_ARM_MS:
+                    armed = True
 
-        if any_over:
-            last_over_ts = now
+                trig = None; any_over = False
+                for ch in magv:
+                    mu = running_mean.get(ch, 0.0)
+                    sg = running_sigma.get(ch, 0.5)
+                    delta = magv[ch] - mu
+                    over = (delta > (K_SIGMA * sg)) and (magv[ch] >= MIN_MAG)
+                    if over:
+                        any_over = True
+                        consec_over[ch] = min(CONSEC_REQUIRED, consec_over.get(ch,0)+1)
+                        if consec_over[ch] >= CONSEC_REQUIRED and armed:
+                            trig = ch; break
+                    else:
+                        consec_over[ch] = 0
 
-        if trig is not None:
-            global tdoa_snapshot
-            # Capture TDOA timestamps immediately (they should already be set from interrupts)
-            # Then wait briefly for any remaining sensors to fire
-            if TDOA_ENABLED:
-                time.sleep_ms(10)  # Wait for all sensors to fire
-                tdoa_snapshot = dict(int_timestamps)  # Snapshot the timestamps
+                if any_over:
+                    last_over_ts = now
 
-                # Diagnostic: show raw and relative timestamps
-                fired = [ch for ch in CHANNELS if ch in tdoa_snapshot]
-                missing = [ch for ch in CHANNELS if ch not in tdoa_snapshot]
-                if tdoa_snapshot:
-                    t0 = min(tdoa_snapshot.values())
-                    rel = {ch: tdoa_snapshot[ch] - t0 for ch in tdoa_snapshot}
-                    first_int = min(tdoa_snapshot, key=tdoa_snapshot.get)
-                    print("TDOA: fired={} missing={} first_int=ch{} rel_us={}".format(
-                        fired, missing, first_int, rel))
+                if trig is not None:
+                    global tdoa_snapshot
+                    # Adaptive TDOA wait: poll for all sensors, timeout at 15ms
+                    if TDOA_ENABLED:
+                        deadline = time.ticks_add(time.ticks_ms(), 15)
+                        while len(int_timestamps) < len(CHANNELS):
+                            if time.ticks_diff(deadline, time.ticks_ms()) <= 0:
+                                break
+                            time.sleep_ms(1)
+                        tdoa_snapshot = dict(int_timestamps)
+
+                        # Diagnostic: show raw and relative timestamps
+                        fired = [ch for ch in CHANNELS if ch in tdoa_snapshot]
+                        missing = [ch for ch in CHANNELS if ch not in tdoa_snapshot]
+                        if tdoa_snapshot:
+                            t0 = min(tdoa_snapshot.values())
+                            rel = {ch: tdoa_snapshot[ch] - t0 for ch in tdoa_snapshot}
+                            first_int = min(tdoa_snapshot, key=tdoa_snapshot.get)
+                            print("TDOA: fired={} missing={} first_int=ch{} rel_us={}".format(
+                                fired, missing, first_int, rel))
+                        else:
+                            print("TDOA: NO INTERRUPTS FIRED! Check INT1 wiring.")
+
+                        clear_interrupts()  # Clear for accurate timing on next event
+                    else:
+                        tdoa_snapshot = {}
+                    print("TRIG", now, "ch", trig, "mag", magv.get(trig))
+                    in_event = True; first_ch = trig; event_start_ms = now
+                    snapshot_thr = {c: thr_now.get(c, 0.0) for c in CHANNELS}
+                    peak_mag = {c: magv.get(c, 0.0) for c in CHANNELS}
+                    peak_xyz = {c: xyz.get(c, (0,0,0)) for c in CHANNELS}
+                    sum_energy  = {c: 0.0 for c in CHANNELS}
+                    sum_energy2 = {c: 0.0 for c in CHANNELS}
+                    sum_samples = {c: 0 for c in CHANNELS}
+                    waveform = {c: [] for c in CHANNELS}  # Reset waveform buffer for new event
                 else:
-                    print("TDOA: NO INTERRUPTS FIRED! Check INT1 wiring.")
+                    for ch in magv:
+                        update_baseline(ch, magv[ch])
 
-                clear_interrupts()  # Clear for accurate timing on next event
-            else:
-                tdoa_snapshot = {}
-            print("TRIG", now, "ch", trig, "mag", magv.get(trig))
-            in_event = True; first_ch = trig; event_start_ms = now
-            snapshot_thr = {c: thr_now.get(c, 0.0) for c in CHANNELS}
-            peak_mag = {c: magv.get(c, 0.0) for c in CHANNELS}
-            peak_xyz = {c: xyz.get(c, (0,0,0)) for c in CHANNELS}
-            sum_energy  = {c: 0.0 for c in CHANNELS}
-            sum_energy2 = {c: 0.0 for c in CHANNELS}
-            sum_samples = {c: 0 for c in CHANNELS}
-            waveform = {c: [] for c in CHANNELS}  # Reset waveform buffer for new event
-            time.sleep_ms(dt); continue
+                    # Clear stale interrupts during idle (prevents old timestamps from persisting)
+                    if TDOA_ENABLED and int_timestamps:
+                        clear_interrupts()
 
-        for ch in magv:
-            update_baseline(ch, magv[ch])
-
-        # Clear stale interrupts during idle (prevents old timestamps from persisting)
-        if TDOA_ENABLED and int_timestamps:
-            clear_interrupts()
-
-        time.sleep_ms(dt)
+        # Adaptive sleep: only sleep remaining time to hit target loop period
+        elapsed_us = time.ticks_diff(time.ticks_us(), loop_start_us)
+        if elapsed_us < target_us:
+            time.sleep_us(target_us - elapsed_us)
 
 # ---------- ENTRY ----------
 def main():
