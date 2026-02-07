@@ -39,7 +39,7 @@ ADXL_ADDRS   = [0x53, 0x1D]
 
 # ---------- TDOA CONFIG ----------
 # GPIO pins for INT1 from each sensor (direct wires, not through mux)
-INT_PINS = {0: 5, 1: 3, 2: 4, 3: 2}  # channel: GPIO pin
+INT_PINS = {0: 5, 1: 4, 2: 3, 3: 2}  # channel: GPIO pin
 
 # ADXL345 interrupt registers
 REG_THRESH_ACT    = 0x24  # Activity threshold
