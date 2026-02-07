@@ -1,7 +1,7 @@
 # Pico W code for detector-only mode: always sends hit candidates to Pi, which classifies + maps them.
 # Running on the Pico so ignore errors about missing modules (e.g. network, socket). This is the "main.py" that the Pico executes on boot.
 # ================== main.py (PICO detector-only: always sends events; Pi classifies + maps) ==================
-import machine, network, socket, time, math, ujson, struct
+import machine, network, socket, time, math, ujson, struct  # type: ignore
 from secrets import SSID, PASSWORD
 
 # ---------- USER CONFIG ----------
