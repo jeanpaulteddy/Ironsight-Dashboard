@@ -854,11 +854,11 @@ class UDPProtocol(asyncio.DatagramProtocol):
             "energy_W": comp["W"],
             "energy_S": comp["S"],
             "energy_E": comp["E"],
-            # Per-channel peaks (map channel to compass)
-            "peak_N": ch_peak.get(comp_to_ch.get("N", ""), 0),
-            "peak_W": ch_peak.get(comp_to_ch.get("W", ""), 0),
-            "peak_S": ch_peak.get(comp_to_ch.get("S", ""), 0),
-            "peak_E": ch_peak.get(comp_to_ch.get("E", ""), 0),
+            # Per-channel peaks (map channel to compass, convert to str for lookup)
+            "peak_N": ch_peak.get(str(comp_to_ch.get("N", "")), 0),
+            "peak_W": ch_peak.get(str(comp_to_ch.get("W", "")), 0),
+            "peak_S": ch_peak.get(str(comp_to_ch.get("S", "")), 0),
+            "peak_E": ch_peak.get(str(comp_to_ch.get("E", "")), 0),
             # Classification
             "label": label,
             "score": score,
