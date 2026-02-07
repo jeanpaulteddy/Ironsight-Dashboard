@@ -5,6 +5,7 @@ from typing import Dict, Any, Callable, Optional
 from datetime import datetime
 from pathlib import Path
 import os
+import config
 try:
     from mode_state import get_mode as default_get_mode
 except Exception:
@@ -145,6 +146,16 @@ def fuse_localization(sx_energy: float, sy_energy: float, energy_conf: float,
 
     Returns (sx, sy, method_used) where method_used describes the fusion.
     """
+    # Forced mode override from config
+    mode = getattr(config, "LOCALIZATION_MODE", "fusion")
+    if mode == "energy":
+        return sx_energy, sy_energy, "energy_only(forced)"
+    if mode == "tdoa":
+        if sx_tdoa is not None and sy_tdoa is not None:
+            return sx_tdoa, sy_tdoa, "tdoa_only(forced)"
+        print("[FUSION] WARN: LOCALIZATION_MODE=tdoa but TDOA unavailable, falling back to energy")
+        return sx_energy, sy_energy, "energy_only(tdoa_unavailable)"
+
     # If TDOA not available, use energy only
     if sx_tdoa is None or sy_tdoa is None:
         return sx_energy, sy_energy, "energy_only"
@@ -199,6 +210,7 @@ HIT_LOG_ENABLED = True
 CSV_HEADERS = [
     "date", "time", "seq", "node", "session_id",
     "mode(shooting|calibration)",
+    "localization_mode(energy|tdoa|fusion)",
     "estimated_x_cm", "estimated_y_cm",
     "fused_sx(-1to1)", "fused_sy(-1to1)",
     "clicked_x_cm(cal_only)", "clicked_y_cm(cal_only)",
@@ -258,6 +270,7 @@ def log_hit(evt: Dict[str, Any], mode: str = "shooting", session_id: str = ""):
                 session_id,
                 # Mode
                 mode,
+                getattr(config, "LOCALIZATION_MODE", "fusion"),
                 # Software estimated position
                 round(evt.get("x_m", 0), 1),
                 round(evt.get("y_m", 0), 1),
