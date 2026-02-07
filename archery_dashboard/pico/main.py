@@ -221,7 +221,7 @@ def detect_adxl_addr(ch):
 
 def init_adxl345(ch, addr):
     adxl_write(ch, addr, 0x2D, 0x00); time.sleep_ms(2)  # standby
-    adxl_write(ch, addr, 0x31, 0x0B)                  # full-res ±16g (4x headroom for distinct peak values per channel)
+    adxl_write(ch, addr, 0x31, 0x09)                  # full-res ±4g (prevents clipping on 38lb recurve impacts)
     adxl_write(ch, addr, 0x2C, ADXL_ODR)              # 3200 Hz ODR for TDOA precision
 
     # Configure activity interrupt for TDOA
@@ -594,9 +594,6 @@ def main_loop():
                     print("TDOA: fired={} missing={} first_int=ch{} rel_us={} reason={}".format(
                         fired, missing, first_int, rel, reason))
 
-                # Debug: show per-channel peaks before sending (verify no saturation)
-                print("PEAK_MAG:", {str(c): round(peak_mag.get(c,0.0),1) for c in CHANNELS})
-
                 print("SEND", now, "seq", seq, "maxPeak", event_max_peak, "sumE2", e2_sum,
                       "latency_ms", time.ticks_diff(now, trigger_start_ms))
                 send_bundle(build_bundle(now))
@@ -611,12 +608,6 @@ def main_loop():
                 channels_read.clear()
                 tdoa_snapshot = {}
                 waveform = {ch: [] for ch in CHANNELS}
-                # Reset peak tracking for next event (prevents stale values)
-                peak_mag = {}
-                peak_xyz = {}
-                sum_energy = {}
-                sum_energy2 = {}
-                sum_samples = {}
                 clear_interrupts()
 
         elif not in_refract:
