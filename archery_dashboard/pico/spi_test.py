@@ -88,7 +88,9 @@ print("\nReading... (Ctrl+C to stop)\n")
 
 # --- READ LOOP ---
 sample_count = 0
+cycle_count = 0
 t_start = time.ticks_us()
+latest = {}  # store latest reading per channel
 
 try:
     while True:
@@ -98,14 +100,18 @@ try:
             x, y, z = struct.unpack('<hhh', raw)
             m = mag3(x, y, z)
             sample_count += 1
+            latest[ch] = (x, y, z, m)
 
-            if sample_count % (100 * len(active_channels)) == 0:
-                elapsed_ms = time.ticks_diff(time.ticks_us(), t_start) / 1000
-                rate = sample_count / (elapsed_ms / 1000) if elapsed_ms > 0 else 0
-                per_sensor = rate / len(active_channels)
-                # Print latest reading from each sensor
+        cycle_count += 1
+        if cycle_count % 100 == 0:
+            elapsed_ms = time.ticks_diff(time.ticks_us(), t_start) / 1000
+            rate = sample_count / (elapsed_ms / 1000) if elapsed_ms > 0 else 0
+            per_sensor = rate / len(active_channels)
+            for ch in active_channels:
+                x, y, z, m = latest[ch]
                 print("CH{}  x={:>6d} y={:>6d} z={:>6d} mag={:>7.1f}  |  total={:.0f} Hz ({:.0f}/sensor)".format(
                     ch, x, y, z, m, rate, per_sensor))
+            print()
 
         time.sleep_us(100)
 
