@@ -36,32 +36,14 @@
 
     <main>
         <div class="grid2">
-          <!-- LEFT COLUMN (60%) -->
+          <!-- LEFT COLUMN — Target + Status -->
           <div class="col">
-            <section class="card camera">
-              <h2>Camera</h2>
-
-              <div class="camHeader">
-                <div v-if="postureSmooth?.posture" class="posture postureInCam">
-                  <div class="pscore" :class="postureClass(postureSmooth.posture.score)">
-                    {{ Math.round(postureSmooth.posture.score) }}
-                  </div>
-                  <div class="ptips">
-                    <div class="ptitle">Posture</div>
-                    <div v-if="postureSmooth.posture.messages?.length" class="pmsg">
-                      <div v-for="(m, i) in postureSmooth.posture.messages" :key="i" class="pmsgLine">
-                        {{ m }}
-                      </div>
-                    </div>
-                    <div v-else class="pmsg ok">Looks good</div>
-                  </div>
-                </div>
+            <section class="card">
+              <div class="cardhead">
+                <h2>Target</h2>
+                <button class="btn" @click="clearShots">Clear</button>
               </div>
-
-              <div class="camWrap">
-                <img v-if="cameraOk" class="camImg" :src="`${API}/api/camera/stream`" alt="camera" @error="cameraOk = false" />
-                <div v-else class="camOffline">Camera unavailable</div>
-              </div>
+              <TargetView v-if="Object.keys(rings).length" :shots="shots" :rings="rings" />
             </section>
 
             <section class="card">
@@ -72,11 +54,6 @@
                   <span class="status-label">Pico</span>
                   <span class="status-detail">{{ picoText }}</span>
                 </div>
-                <div class="status-row">
-                  <span class="status-dot" :class="camClass"></span>
-                  <span class="status-label">Camera</span>
-                  <span class="status-detail">{{ camText }}</span>
-                </div>
                 <div v-if="sysStatus?.last_hit_ago_s != null" class="status-row">
                   <span class="status-dot dim"></span>
                   <span class="status-label">Last Hit</span>
@@ -86,21 +63,42 @@
             </section>
           </div>
 
-          <!-- RIGHT COLUMN (40%) -->
+          <!-- RIGHT COLUMN — Scorecard -->
           <div class="col">
             <section class="card">
               <h2>Scorecard</h2>
               <ScoreTable :table="table" />
             </section>
-
-            <section class="card">
-              <div class="cardhead">
-                <h2>Target</h2>
-                <button class="btn" @click="clearShots">Clear</button>
-              </div>
-              <TargetView v-if="Object.keys(rings).length" :shots="shots" :rings="rings" />
-            </section>
           </div>
+        </div>
+
+        <!-- CAMERA — full width below -->
+        <div class="camera-row">
+          <section class="card camera">
+            <h2>Camera</h2>
+
+            <div class="camHeader">
+              <div v-if="postureSmooth?.posture" class="posture postureInCam">
+                <div class="pscore" :class="postureClass(postureSmooth.posture.score)">
+                  {{ Math.round(postureSmooth.posture.score) }}
+                </div>
+                <div class="ptips">
+                  <div class="ptitle">Posture</div>
+                  <div v-if="postureSmooth.posture.messages?.length" class="pmsg">
+                    <div v-for="(m, i) in postureSmooth.posture.messages" :key="i" class="pmsgLine">
+                      {{ m }}
+                    </div>
+                  </div>
+                  <div v-else class="pmsg ok">Looks good</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="camWrap">
+              <img v-if="cameraOk" class="camImg" :src="`${API}/api/camera/stream`" alt="camera" @error="cameraOk = false" />
+              <div v-else class="camOffline">Camera unavailable</div>
+            </div>
+          </section>
         </div>
     </main>
 
@@ -151,22 +149,6 @@ const picoText = computed(() => {
   if (p.status === "offline") return `Offline (${formatAgo(p.last_packet_ago_s)})`
   return "Waiting for data…"
 })
-const camClass = computed(() => {
-  const c = sysStatus.value?.camera
-  if (!c) return "gray"
-  if (c.status === "online" && c.has_frame) return "green"
-  if (c.status === "online") return "yellow"
-  return "red"
-})
-const camText = computed(() => {
-  const c = sysStatus.value?.camera
-  if (!c) return "No data"
-  if (c.status === "online" && c.has_frame) return "Streaming"
-  if (c.status === "online") return "Running (no frames)"
-  if (c.status === "unavailable") return "Not available"
-  return c.error || "Offline"
-})
-
 function formatAgo(seconds) {
   if (seconds == null) return "Never"
   if (seconds < 60) return `${Math.round(seconds)}s ago`
@@ -364,6 +346,10 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.camera-row {
+  padding: 0 14px 14px;
 }
 
 .postureInCam {

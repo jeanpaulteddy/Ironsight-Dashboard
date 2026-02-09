@@ -485,15 +485,7 @@ def system_status():
             "pico": {"status": "unknown", "last_packet_ago_s": None},
             "last_hit_ago_s": None,
         }
-    if _camera_available:
-        cam = {
-            "status": "online" if camera.is_camera_running() else "offline",
-            "error": camera.get_camera_error(),
-            "has_frame": camera.get_latest_frame() is not None,
-        }
-    else:
-        cam = {"status": "unavailable", "error": None, "has_frame": False}
-    return {**pico_info, "camera": cam}
+    return pico_info
 
 @app.get("/api/posture")
 def api_posture():
