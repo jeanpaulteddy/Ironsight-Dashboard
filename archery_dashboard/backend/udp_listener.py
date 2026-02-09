@@ -27,6 +27,31 @@ def extract_compass_peaks(msg: Dict[str, Any], ch2comp: Dict[str, str]) -> Dict[
             out[comp] = float(pk)
     return out
 
+def extract_compass_raw_peaks(msg: Dict[str, Any], ch2comp: Dict[str, str]) -> Dict[str, float]:
+    """Same as extract_compass_peaks but always reads the raw 'peak' field."""
+    ch = msg.get("ch", {})
+    peaks_by_ch = {k: float(v.get("peak", 0.0)) for k, v in ch.items()}
+
+    out = {"N": 0.0, "E": 0.0, "W": 0.0, "S": 0.0}
+    for ch_str, pk in peaks_by_ch.items():
+        comp = ch2comp.get(ch_str)
+        if comp:
+            out[comp] = float(pk)
+    return out
+
+# ---------- LOG-RATIO PREDICTOR (from analyze_peaks.py Approach C) ----------
+_LOGRATIO_CX = [-0.155793, -3.615685, 0.897763]   # [lr_ew, lr_ns, 1] -> x_cm
+_LOGRATIO_CY = [-5.709831, -4.138854, 3.860809]   # [lr_ew, lr_ns, 1] -> y_cm
+
+def xy_from_logratio(pN: float, pW: float, pS: float, pE: float):
+    """Predict (x, y) in cm from raw peak values using log-ratio + OLS coefficients."""
+    eps = 1e-12
+    lr_ew = log((pE + eps) / (pW + eps))
+    lr_ns = log((pN + eps) / (pS + eps))
+    x = _LOGRATIO_CX[0] * lr_ew + _LOGRATIO_CX[1] * lr_ns + _LOGRATIO_CX[2]
+    y = _LOGRATIO_CY[0] * lr_ew + _LOGRATIO_CY[1] * lr_ns + _LOGRATIO_CY[2]
+    return x, y
+
 def features_from_peaks(pN: float, pE: float, pW: float, pS: float):
     eps = 1e-12
     sx = (pE - pW) / (pE + pW + eps)
@@ -549,6 +574,9 @@ class UDPProtocol(asyncio.DatagramProtocol):
         comp = extract_compass_peaks(msg, self.ch2comp)
         energy = comp["N"] + comp["E"] + comp["W"] + comp["S"]
 
+        # Raw peaks for log-ratio position prediction (coefficients trained on raw peaks)
+        raw_peaks = extract_compass_raw_peaks(msg, self.ch2comp)
+
         # Determine mode early (calibration can be stricter)
         mode = self.mode_getter() if self.mode_getter else None
         mode_s = str(mode).strip().lower() if mode is not None else ""
@@ -809,6 +837,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
             print(f"[FUSION] method={fusion_method}  energy_conf={energy_conf:.2f}  tdoa_conf={tdoa_conf:.2f}")
             print(f"         sx_e={sx_energy:+.3f} sy_e={sy_energy:+.3f} | sx_t={f'{sx_tdoa:+.3f}' if sx_tdoa else 'N/A'} sy_t={f'{sy_tdoa:+.3f}' if sy_tdoa else 'N/A'} -> sx={sx:+.3f} sy={sy:+.3f}")
 
+        # Use live calibration if available, otherwise hardcoded log-ratio
         fit = self.fit_getter() if self.fit_getter else None
         if getattr(self, "debug_print", False):
             fit_info = None if not fit else fit.get('model')
@@ -823,7 +852,10 @@ class UDPProtocol(asyncio.DatagramProtocol):
                 f"sx_raw={sx_raw:+.3f} sy_raw={sy_raw:+.3f} -> sx_e={sx_energy:+.3f} sy_e={sy_energy:+.3f} -> sx={sx:+.3f} sy={sy:+.3f}"
             )
 
-        x, y = xy_from_features(sx, sy, fit)
+        if fit:
+            x, y = xy_from_features(sx, sy, fit)
+        else:
+            x, y = xy_from_logratio(raw_peaks["N"], raw_peaks["W"], raw_peaks["S"], raw_peaks["E"])
         r = math.hypot(x, y)
 
         if getattr(self, "debug_print", False):
