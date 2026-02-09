@@ -65,8 +65,24 @@
             </section>
 
             <section class="card">
-              <h2>Status</h2>
-              <pre class="mono">{{ stateText }}</pre>
+              <h2>System Status</h2>
+              <div class="status-grid">
+                <div class="status-row">
+                  <span class="status-dot" :class="picoClass"></span>
+                  <span class="status-label">Pico</span>
+                  <span class="status-detail">{{ picoText }}</span>
+                </div>
+                <div class="status-row">
+                  <span class="status-dot" :class="camClass"></span>
+                  <span class="status-label">Camera</span>
+                  <span class="status-detail">{{ camText }}</span>
+                </div>
+                <div v-if="sysStatus?.last_hit_ago_s != null" class="status-row">
+                  <span class="status-dot dim"></span>
+                  <span class="status-label">Last Hit</span>
+                  <span class="status-detail">{{ formatAgo(sysStatus.last_hit_ago_s) }}</span>
+                </div>
+              </div>
             </section>
           </div>
 
@@ -98,7 +114,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from "vue"
+import { ref, computed, onMounted, onUnmounted } from "vue"
 import TargetView from "../components/TargetView.vue"
 import ScoreTable from "../components/ScoreTable.vue"
 import SessionConfigModal from "../components/SessionConfigModal.vue"
@@ -117,6 +133,53 @@ const _lastTipsAt = ref(0)             // rate limit tips text
 const _tips = ref([])                  // stable tips array
 
 const mode = ref("shooting")
+
+// System status polling
+const sysStatus = ref(null)
+let _statusInterval = null
+
+const picoClass = computed(() => {
+  const s = sysStatus.value?.pico?.status
+  if (s === "online") return "green"
+  if (s === "offline") return "red"
+  return "gray"
+})
+const picoText = computed(() => {
+  const p = sysStatus.value?.pico
+  if (!p) return "No data"
+  if (p.status === "online") return "Online"
+  if (p.status === "offline") return `Offline (${formatAgo(p.last_packet_ago_s)})`
+  return "Waiting for data…"
+})
+const camClass = computed(() => {
+  const c = sysStatus.value?.camera
+  if (!c) return "gray"
+  if (c.status === "online" && c.has_frame) return "green"
+  if (c.status === "online") return "yellow"
+  return "red"
+})
+const camText = computed(() => {
+  const c = sysStatus.value?.camera
+  if (!c) return "No data"
+  if (c.status === "online" && c.has_frame) return "Streaming"
+  if (c.status === "online") return "Running (no frames)"
+  if (c.status === "unavailable") return "Not available"
+  return c.error || "Offline"
+})
+
+function formatAgo(seconds) {
+  if (seconds == null) return "Never"
+  if (seconds < 60) return `${Math.round(seconds)}s ago`
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`
+  return `${Math.round(seconds / 3600)}h ago`
+}
+
+async function pollStatus() {
+  try {
+    const r = await fetch(`${API}/api/system/status`)
+    sysStatus.value = await r.json()
+  } catch { sysStatus.value = null }
+}
 
 // Session management
 const currentSession = ref(null)
@@ -205,7 +268,15 @@ async function endSession() {
   }
 }
 
+onUnmounted(() => {
+  if (_statusInterval) clearInterval(_statusInterval)
+})
+
 onMounted(async () => {
+  // Start system status polling
+  await pollStatus()
+  _statusInterval = setInterval(pollStatus, 5000)
+
   // Check for active session
   await checkActiveSession()
 
@@ -526,5 +597,39 @@ onMounted(async () => {
   .session-info, .no-session-warning {
     width: 100%;
   }
+}
+
+.status-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.03);
+}
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.status-dot.green { background: #3cdc78; box-shadow: 0 0 6px rgba(60,220,120,0.4); }
+.status-dot.yellow { background: #ffc83c; box-shadow: 0 0 6px rgba(255,200,60,0.4); }
+.status-dot.red { background: #ff5a5a; box-shadow: 0 0 6px rgba(255,90,90,0.4); }
+.status-dot.gray { background: #555; }
+.status-dot.dim { background: #444; }
+.status-label {
+  font-weight: 600;
+  font-size: 13px;
+  min-width: 70px;
+}
+.status-detail {
+  font-size: 12px;
+  opacity: 0.7;
 }
 </style>

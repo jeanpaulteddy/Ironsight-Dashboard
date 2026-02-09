@@ -378,6 +378,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
         self.fit_getter = fit_getter
         self.cal_getter = cal_getter
         self._last_accept_ts = 0.0
+        self._last_packet_ts = 0.0   # any hit_bundle received (even rejected)
 
         # duplicate-suppression window (shorter so real consecutive arrows don't get dropped)
         self.cooldown_s = 0.35
@@ -450,7 +451,21 @@ class UDPProtocol(asyncio.DatagramProtocol):
 
         # Initialize CSV hit logging
         init_hit_log()
-        
+
+    def get_status(self) -> dict:
+        now = time.time()
+        age = now - self._last_packet_ts if self._last_packet_ts > 0 else None
+        if self._last_packet_ts == 0:
+            pico_status = "unknown"
+        elif age <= 30:
+            pico_status = "online"
+        else:
+            pico_status = "offline"
+        return {
+            "pico": {"status": pico_status, "last_packet_ago_s": round(age, 1) if age is not None else None},
+            "last_hit_ago_s": round(now - self._last_accept_ts, 1) if self._last_accept_ts > 0 else None,
+        }
+
     def datagram_received(self, data: bytes, addr):
         try:
             msg = json.loads(data.decode("utf-8", errors="ignore"))
@@ -459,6 +474,8 @@ class UDPProtocol(asyncio.DatagramProtocol):
 
         if not (isinstance(msg, dict) and msg.get("type") == "hit_bundle"):
             return
+
+        self._last_packet_ts = time.time()
 
         # Pretty bundle separation
         if getattr(self, "debug_print", False) and getattr(self, "pretty_print", False):
@@ -870,12 +887,14 @@ class UDPProtocol(asyncio.DatagramProtocol):
         except asyncio.QueueFull:
             pass
 
-async def udp_loop(host: str, port: int, queue: asyncio.Queue, ch2comp: Dict[str, str], mode_getter, fit_getter=None, cal_getter=None):
+async def udp_loop(host: str, port: int, queue: asyncio.Queue, ch2comp: Dict[str, str], mode_getter, fit_getter=None, cal_getter=None, status_holder=None):
     loop = asyncio.get_running_loop()
-    transport, _ = await loop.create_datagram_endpoint(
+    transport, protocol = await loop.create_datagram_endpoint(
         lambda: UDPProtocol(queue, ch2comp, mode_getter=mode_getter, fit_getter=fit_getter, cal_getter=cal_getter),
         local_addr=(host, port),
     )
+    if status_holder is not None:
+        status_holder["protocol"] = protocol
     try:
         while True:
             await asyncio.sleep(3600)

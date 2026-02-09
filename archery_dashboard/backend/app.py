@@ -68,6 +68,7 @@ _pose_queue: asyncio.Queue = asyncio.Queue()
 clients: Set[WebSocket] = set()
 state = SessionState()
 queue: asyncio.Queue = asyncio.Queue(maxsize=200)
+_udp_status_holder: dict = {}
 
 # Session manager for tracking active sessions
 session_manager = SessionManager()
@@ -158,7 +159,7 @@ async def startup():
                 print("[CAL] loaded fit from disk:", calibration_fit)
     except Exception:
         calibration_fit = None
-    asyncio.create_task(udp_loop(config.UDP_HOST, config.UDP_PORT, queue, CH2COMP, get_mode, fit_getter=get_fit, cal_getter=get_cal_active))
+    asyncio.create_task(udp_loop(config.UDP_HOST, config.UDP_PORT, queue, CH2COMP, get_mode, fit_getter=get_fit, cal_getter=get_cal_active, status_holder=_udp_status_holder))
     asyncio.create_task(dispatch_loop())
 
 @app.on_event("startup")
@@ -473,6 +474,26 @@ def camera_status():
         "error": camera.get_camera_error(),
         "has_frame": camera.get_latest_frame() is not None,
     }
+
+@app.get("/api/system/status")
+def system_status():
+    protocol = _udp_status_holder.get("protocol")
+    if protocol:
+        pico_info = protocol.get_status()
+    else:
+        pico_info = {
+            "pico": {"status": "unknown", "last_packet_ago_s": None},
+            "last_hit_ago_s": None,
+        }
+    if _camera_available:
+        cam = {
+            "status": "online" if camera.is_camera_running() else "offline",
+            "error": camera.get_camera_error(),
+            "has_frame": camera.get_latest_frame() is not None,
+        }
+    else:
+        cam = {"status": "unavailable", "error": None, "has_frame": False}
+    return {**pico_info, "camera": cam}
 
 @app.get("/api/posture")
 def api_posture():
