@@ -1,6 +1,6 @@
 # SPI test for single ADXL345 on Pico W
 # Wiring: CS=GP17, SCK=GP18, MOSI(SDA)=GP19, MISO(SDO)=GP16
-import machine, time, math, struct
+import machine, time, math, struct # type: ignore
 
 # --- SPI CONFIG ---
 SPI_ID   = 0
