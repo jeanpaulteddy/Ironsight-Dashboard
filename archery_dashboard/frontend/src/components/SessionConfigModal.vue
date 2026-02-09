@@ -12,7 +12,7 @@
             v-model.number="arrowsPerEnd"
             type="number"
             min="1"
-            max="20"
+            max="12"
             required
           />
           <small>Number of arrows to shoot before pausing (typically 3 or 6)</small>
@@ -25,7 +25,7 @@
             v-model.number="numEnds"
             type="number"
             min="1"
-            max="50"
+            max="20"
             required
           />
           <small>How many ends to shoot in this session</small>

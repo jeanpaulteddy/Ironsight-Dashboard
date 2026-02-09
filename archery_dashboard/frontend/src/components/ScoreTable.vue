@@ -1,17 +1,16 @@
 <template>
   <div v-if="table" class="wrap">
-    <table class="score">
+    <div class="table-scroll">
+    <table class="score" :class="{ compact: arrowsPerEnd > 6 }">
       <thead>
         <tr>
           <th class="endcol" rowspan="2">End</th>
-          <th class="arrowshead" colspan="3">Arrows</th>
+          <th class="arrowshead" :colspan="arrowsPerEnd">Arrows</th>
           <th class="scorecol" rowspan="2">Score</th>
           <th class="rtcol" rowspan="2">R.Total</th>
         </tr>
         <tr>
-          <th class="arrowcol">1</th>
-          <th class="arrowcol">2</th>
-          <th class="arrowcol">3</th>
+          <th v-for="i in arrowsPerEnd" :key="i" class="arrowcol">{{ i }}</th>
         </tr>
       </thead>
 
@@ -32,6 +31,7 @@
         </tr>
       </tbody>
     </table>
+    </div>
     <div class="footer">
       <div class="counts">
         <div class="count" v-for="k in footerKeys" :key="k">
@@ -60,6 +60,7 @@ const props = defineProps({
 })
 
 const arrowsPerEnd = computed(() => props.table?.arrows_per_end ?? 3)
+const numEnds = computed(() => props.table?.num_ends ?? 10)
 const currentPos = computed(() => {
   const ends = props.table?.ends ?? []
   const ape = arrowsPerEnd.value
@@ -86,8 +87,8 @@ const paddedEnds = computed(() => {
     running: e.running
   }))
 
-  // show at least 10 ends for the visual (like the screenshot)
-  for (let i = out.length + 1; i <= 10; i++) {
+  // pad to the configured number of ends
+  for (let i = out.length + 1; i <= numEnds.value; i++) {
     out.push({ end: i, arrows: Array(arrowsPerEnd.value).fill(""), score: "", running: "" })
   }
   return out
@@ -118,6 +119,18 @@ const footerKeys = computed(() => {
 
 <style scoped>
 .wrap { display:flex; flex-direction:column; gap:10px; }
+
+.table-scroll {
+  max-height: 480px;
+  overflow-y: auto;
+}
+
+.table-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #161b22;
+}
 .num { width: 72px; }
 
 .badge {
@@ -255,6 +268,24 @@ thead th {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* Compact mode for > 6 arrows per end */
+.compact th, .compact td {
+  padding: 6px 4px;
+  font-size: 12px;
+}
+
+.compact .arrowcol { width: 52px; }
+
+.compact .badge {
+  width: 26px;
+  height: 26px;
+  font-size: 11px;
+}
+
+.compact .cell {
+  height: 26px;
 }
 
 td.active {
