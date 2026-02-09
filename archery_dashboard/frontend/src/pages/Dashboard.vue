@@ -59,7 +59,8 @@
               </div>
 
               <div class="camWrap">
-                <img class="camImg" :src="`http://${host}:8081/stream`" alt="camera" />
+                <img v-if="cameraOk" class="camImg" :src="`http://${host}:8081/stream`" alt="camera" @error="cameraOk = false" />
+                <div v-else class="camOffline">Camera unavailable</div>
               </div>
             </section>
 
@@ -105,7 +106,7 @@ import SessionConfigModal from "../components/SessionConfigModal.vue"
 const host = window.location.hostname
 const API = `http://${host}:8000`
 
-const posture = ref(null)
+const cameraOk = ref(true)
 const shots = ref([])
 const rings = ref({})
 const table = ref(null)
@@ -401,6 +402,16 @@ onMounted(async () => {
 
 .pmsgLine{
   margin-top: 6px;
+}
+
+.camOffline {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255,255,255,0.5);
+  font-size: 14px;
 }
 
 .card.camera {

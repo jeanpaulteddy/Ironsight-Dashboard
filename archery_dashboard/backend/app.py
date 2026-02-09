@@ -103,7 +103,7 @@ async def _pose_broadcaster():
                 dead = []
                 for ws in list(_pose_clients):
                     try:
-                        await ws.send_json(pose)
+                        await ws.send_json({"type": "pose", "posture": pose})
                     except Exception:
                         dead.append(ws)
                 for ws in dead:
@@ -416,7 +416,7 @@ async def ws_pose(ws: WebSocket):
     # send latest pose immediately (if available)
     latest = get_latest_pose()
     if latest is not None:
-        await ws.send_json(latest)
+        await ws.send_json({"type": "pose", "posture": latest})
 
     try:
         # Keep the connection open. We don't require any client messages.
