@@ -123,7 +123,7 @@ def init_adxl345(ch):
     cs = cs_pins[ch]
     spi_write(cs, REG_POWER_CTL, 0x00)      # standby
     time.sleep_ms(2)
-    spi_write(cs, REG_DATA_FORMAT, 0x09)     # full-res ±4g
+    spi_write(cs, REG_DATA_FORMAT, 0x0B)     # full-res ±16g, 13-bit
     spi_write(cs, REG_BW_RATE, ADXL_ODR)    # 3200 Hz ODR
     spi_write(cs, REG_FIFO_CTL, 0x00)       # bypass mode (flush FIFO)
     spi_write(cs, REG_POWER_CTL, 0x08)      # measure mode
@@ -154,6 +154,15 @@ def fifo_burst_read(ch):
         x, y, z = struct.unpack('<hhh', raw)
         samples.append((x, y, z))
     return samples
+
+def fifo_read_single(ch):
+    """Read single sample from sensor. Returns (x, y, z) or None if FIFO empty."""
+    cs = cs_pins[ch]
+    count = spi_read(cs, REG_FIFO_STATUS, 1)[0] & 0x3F
+    if count == 0:
+        return None
+    raw = spi_read(cs, REG_DATAX0, 6)
+    return struct.unpack('<hhh', raw)
 
 # ---------- UTILITY ----------
 def mag3(x, y, z):
@@ -430,27 +439,28 @@ def main_loop():
                     time.sleep_us(target_us - elapsed_us)
 
         elif state == "EVENT":
-            # Tight loop — no sleep, burst-read FIFO from all sensors
+            # Round-robin: read one sample from each sensor per iteration
+            any_read = False
             for ch in active_channels:
                 if ch_peak_state.get(ch) == "PEAKED":
                     continue  # Already peaked, skip reads
 
                 try:
-                    samples = fifo_burst_read(ch)
+                    sample = fifo_read_single(ch)
                 except Exception:
                     continue
 
-                n = len(samples)
-                if n == 0:
-                    continue
+                if sample:
+                    any_read = True
+                    x, y, z = sample
+                    process_event_sample(ch, x, y, z, time.ticks_us())
 
-                # Reconstruct timestamps: oldest sample first
-                t_now = time.ticks_us()
-                for i, (x, y, z) in enumerate(samples):
-                    t_sample = t_now - int((n - 1 - i) * SAMPLE_PERIOD_US)
-                    process_event_sample(ch, x, y, z, t_sample)
+            # Small yield if no samples available (prevents tight spin)
+            if not any_read:
+                time.sleep_us(100)
 
             # Check exit conditions
+            now = time.ticks_ms()
             all_peaked = all(ch_peak_state.get(c) == "PEAKED" for c in active_channels)
             timed_out = time.ticks_diff(now, event_start_ms) >= TRIGGER_TIMEOUT_MS
 
@@ -510,7 +520,7 @@ def main():
         init_adxl345(ch)
     time.sleep_ms(10)
 
-    print("Config: full-res +/-4g, 3200Hz ODR, SPI @ {}MHz".format(SPI_BAUD // 1_000_000))
+    print("Config: full-res +/-16g, 3200Hz ODR, SPI @ {}MHz".format(SPI_BAUD // 1_000_000))
     print("Detection: K_SIGMA={}, MIN_MAG={}, SIGMA_CAP={}".format(K_SIGMA, MIN_MAG, SIGMA_CAP))
     print("Event: timeout={}ms, decline_threshold={}, refractory={}ms".format(
         TRIGGER_TIMEOUT_MS, DECLINE_COUNT_THRESHOLD, REFRACT_MS))
