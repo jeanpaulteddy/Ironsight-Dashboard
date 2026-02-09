@@ -4,6 +4,7 @@ import os,json
 from typing import Set, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect # type: ignore
 from fastapi.middleware.cors import CORSMiddleware # type: ignore
+from fastapi.responses import StreamingResponse # type: ignore
 from fastapi.staticfiles import StaticFiles # type: ignore
 from pose_udp_listener import start_pose_udp_listener, get_latest_pose as get_latest_pose_udp
 import numpy as np # type: ignore
@@ -447,6 +448,31 @@ async def set_rings(payload: dict):
 @app.get("/api/shots")
 def get_shots():
     return {"shots": state.all_shots()}
+
+@app.get("/api/camera/stream")
+async def camera_stream():
+    async def generate():
+        while True:
+            frame = camera.get_latest_frame() if _camera_available else None
+            if frame is None:
+                await asyncio.sleep(0.1)
+                continue
+            yield (b"--frame\r\n"
+                   b"Content-Type: image/jpeg\r\n"
+                   b"Content-Length: " + str(len(frame)).encode() + b"\r\n\r\n"
+                   + frame + b"\r\n")
+            await asyncio.sleep(0.05)
+    return StreamingResponse(generate(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+@app.get("/api/camera/status")
+def camera_status():
+    if not _camera_available:
+        return {"running": False, "error": "camera module not available", "has_frame": False}
+    return {
+        "running": camera.is_camera_running(),
+        "error": camera.get_camera_error(),
+        "has_frame": camera.get_latest_frame() is not None,
+    }
 
 @app.get("/api/posture")
 def api_posture():

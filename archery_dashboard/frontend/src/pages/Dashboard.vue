@@ -59,7 +59,7 @@
               </div>
 
               <div class="camWrap">
-                <img v-if="cameraOk" class="camImg" :src="`http://${host}:8081/stream`" alt="camera" @error="cameraOk = false" />
+                <img v-if="cameraOk" class="camImg" :src="`${API}/api/camera/stream`" alt="camera" @error="cameraOk = false" />
                 <div v-else class="camOffline">Camera unavailable</div>
               </div>
             </section>
