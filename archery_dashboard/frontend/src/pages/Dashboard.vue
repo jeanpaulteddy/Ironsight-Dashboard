@@ -87,6 +87,16 @@
         </div>
     </main>
 
+    <!-- End-of-end pause overlay -->
+    <div v-if="endPause" class="modal-overlay" @click.stop>
+      <div class="end-pause-modal">
+        <h2>End {{ endPause.end_number }} Complete</h2>
+        <div class="end-pause-score">{{ endPause.end_score }} pts</div>
+        <p>Go retrieve your arrows, then continue.</p>
+        <button class="btn btn-primary" @click="resumeShooting">Continue Shooting</button>
+      </div>
+    </div>
+
     <!-- Session Config Modal -->
     <SessionConfigModal
       v-if="showConfigModal"
@@ -121,6 +131,7 @@ const mode = ref("shooting")
 const currentSession = ref(null)
 const showConfigModal = ref(false)
 const sessionComplete = ref(false)
+const endPause = ref(null)
 
 async function refreshMode() {
   const r = await fetch(`${API}/api/mode`)
@@ -207,6 +218,11 @@ async function endSession() {
   }
 }
 
+async function resumeShooting() {
+  endPause.value = null
+  await setMode('shooting')
+}
+
 onMounted(async () => {
   // Check for active session
   await checkActiveSession()
@@ -244,6 +260,14 @@ onMounted(async () => {
           }
         }, 1000)
       }
+    }
+    if (msg.type === "end_complete") {
+      endPause.value = {
+        end_number: msg.end_number,
+        end_score: msg.end_score,
+      }
+      // Sync mode display
+      mode.value = "scoring"
     }
   }
   const wsPose = new WebSocket(`ws://${location.hostname}:8000/ws_pose`)
@@ -521,6 +545,48 @@ onMounted(async () => {
 .btn-sm {
   padding: 0.375rem 0.75rem;
   font-size: 0.875rem;
+}
+
+/* End-of-end pause overlay */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.end-pause-modal {
+  background: #0d1117;
+  border: 1px solid #21262d;
+  border-radius: 16px;
+  padding: 2.5rem;
+  text-align: center;
+  max-width: 400px;
+  width: 90%;
+}
+
+.end-pause-modal h2 {
+  margin: 0 0 0.75rem 0;
+  font-size: 1.5rem;
+  opacity: 1;
+}
+
+.end-pause-score {
+  font-size: 2.5rem;
+  font-weight: 900;
+  color: #1f6feb;
+  margin-bottom: 0.5rem;
+}
+
+.end-pause-modal p {
+  color: #8b949e;
+  margin: 0 0 1.5rem 0;
 }
 
 @media (max-width: 768px) {

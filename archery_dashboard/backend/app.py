@@ -259,6 +259,17 @@ async def dispatch_loop():
         else:
             print("[DISPATCH] No active session - shot not saved to database")
 
+        table_payload = state.to_payload()
+
+        # Check if an end just completed (but session isn't done)
+        end_just_completed = False
+        if session_manager.has_active_session() and not state.is_complete():
+            last_end = state.ends[-1] if state.ends else []
+            if len(last_end) >= state.arrows_per_end:
+                end_just_completed = True
+                set_mode("scoring")
+                print(f"[DISPATCH] End {len(state.ends)} complete — auto-paused for arrow retrieval")
+
         payload = {
             "type": "shot",
             "shot": {
@@ -268,14 +279,19 @@ async def dispatch_loop():
                 "r": shot.r,
                 "score": "X" if shot.is_x else shot.score,
             },
-            "table": state.to_payload(),
+            "table": table_payload,
         }
 
         dead = []
         for ws in list(clients):
             try:
                 await ws.send_json(payload)
-                print(f"[DISPATCH] Broadcasted shot to WebSocket client")
+                if end_just_completed:
+                    await ws.send_json({
+                        "type": "end_complete",
+                        "end_number": len(state.ends),
+                        "end_score": sum(s.score for s in last_end),
+                    })
             except Exception as e:
                 print(f"[DISPATCH] Failed to send to client: {e}")
                 dead.append(ws)
@@ -513,10 +529,16 @@ class SessionStartRequest(BaseModel):
 @app.post("/api/session/start")
 async def start_session(payload: SessionStartRequest):
     """Start a new training session"""
+    global state
     session_id = await session_manager.start_session(
         arrows_per_end=payload.arrows_per_end,
         num_ends=payload.num_ends,
         notes=payload.notes
+    )
+    # Reset and sync global state with session config
+    state = SessionState(
+        arrows_per_end=payload.arrows_per_end,
+        num_ends=payload.num_ends,
     )
     return {"ok": True, "session_id": session_id}
 
