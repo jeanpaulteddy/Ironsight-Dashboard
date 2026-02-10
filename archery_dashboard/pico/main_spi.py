@@ -14,7 +14,7 @@ DEST_PORT    = 5005
 
 ODR_HZ       = 1600  # Idle poll rate (SPI is ~35x faster than I2C+mux)
 ADXL_ODR     = 0x0F  # ADXL345 internal ODR: 3200 Hz
-TRIGGER_TIMEOUT_MS = 25   # Max event window (longer to allow peak-tracking)
+TRIGGER_TIMEOUT_MS = 100   # Max event window (longer to allow peak-tracking)
 REFRACT_MS   = 500
 
 K_SIGMA      = 6.0
@@ -38,9 +38,9 @@ PIN_MISO = 16  # SDO on ADXL breakout
 SPI_BAUD = 5_000_000  # 5 MHz (ADXL345 max)
 
 CS_PINS = {
-    0: 17,  # Sensor 0 (North)
+    0: 21,  # Sensor 0 (North)
     1: 20,  # Sensor 1 (West)
-    2: 21,  # Sensor 2 (South)
+    2: 17,  # Sensor 2 (South)
     3: 22,  # Sensor 3 (East)
 }
 
