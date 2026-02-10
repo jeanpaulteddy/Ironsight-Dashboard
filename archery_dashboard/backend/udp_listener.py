@@ -40,8 +40,8 @@ def extract_compass_raw_peaks(msg: Dict[str, Any], ch2comp: Dict[str, str]) -> D
     return out
 
 # ---------- LOG-RATIO PREDICTOR (from analyze_peaks.py Approach C) ----------
-_LOGRATIO_CX = [-0.155793, -3.615685, 0.897763]   # [lr_ew, lr_ns, 1] -> x_cm
-_LOGRATIO_CY = [-5.709831, -4.138854, 3.860809]   # [lr_ew, lr_ns, 1] -> y_cm
+_LOGRATIO_CX = [2.017465, -1.836240, -0.456708]   # [lr_ew, lr_ns, 1] -> x_cm
+_LOGRATIO_CY = [0.533283, -1.494087, 2.572390]   # [lr_ew, lr_ns, 1] -> y_cm
 
 def xy_from_logratio(pN: float, pW: float, pS: float, pE: float):
     """Predict (x, y) in cm from raw peak values using log-ratio + OLS coefficients."""
